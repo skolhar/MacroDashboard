@@ -8,7 +8,7 @@ Branch: `feature/phase2-5-live-data`, based on open Phase 2 PR #1. This branch h
 - Additive Alembic `0003` migration for named scoped operator credentials, audit events, shared database rate counters and immutable alert evaluation history. Offline issue/revoke/rotation tools, trusted-proxy validation and a staging-only Treasury scheduler.
 - Official Treasury adapter now uses a longer bounded timeout and retries transient failures. Source catalog marks RBI, NSDL, AMFI, MoSPI and licensed indicators as manual-only or unavailable until rights and endpoints are reviewed.
 - Separate data-confidence score, real-data coverage, last successful ingestion and point-in-time cycle history in the monitor. Live history transforms reject missing periods. Alert evaluation events allow replay beyond the previous 60-session window when historic events were actually recorded.
-- Regression tests for auth/revocation, proxy spoofing, worker-shared rate limits, source failure, duplicate ingestion, confidence, data gaps, checkpoint persistence, multi-year alert state and point-in-time filtering.
+- Regression tests for auth/revocation, proxy spoofing and alternate paths, concurrent worker-shared rate limits and store failures, source failure, duplicate ingestion, operational confidence labeling, data gaps, checkpoint persistence, late observations, revised vintages, multi-year alert state and point-in-time filtering.
 
 ## Verified observation status
 
@@ -29,10 +29,18 @@ All 42 registered IDs are classified below. “Manual-only” means a documented
 
 ## Validation and open risks
 
-- `.venv/bin/python -m pytest -q`: **44 passed**, one upstream Starlette deprecation warning.
+- Initial Phase 2.5 `.venv/bin/python -m pytest -q`: **44 passed**, one upstream Starlette deprecation warning. PR #2 review follow-up: **48 passed**, same warning.
 - `npm run typecheck` and `npm run build` in `apps/web`: passed. The isolated Docker web build also passed with an existing CSS autoprefixer warning.
 - Playwright in pinned v1.56.0 container: **3 passed** (Phase 1 demo, Phase 2 monitor and Phase 2.5 staging at desktop/mobile widths).
 - Fresh isolated PostgreSQL migration: `alembic current` reported `0003 (head)`. Staging API and DB healthchecks passed; Caddy blocked admin GET/POST with 403. Health, dashboard, source-health and historical replay endpoints returned 200.
 - Official Treasury staging ingestion: HTTP 200 and 21 rows inserted. A second authenticated run inserted 0 and reported 21 duplicates. The scheduler completed a further idempotent run, then was stopped. Replay before first ingestion showed no source-backed reading.
 
 Known limits: historical Treasury publication times are conservative first-ingestion timestamps; NSE 2027 remains unverified; source rights and licenses for Indian/market feeds are outstanding; v2 thresholds and indicator definitions lack historical activation/version validation; event checkpoints only exist from actual ingestion onward; operator credentials are still bearer tokens and require secure distribution; the database rate limiter adds a write per request and needs load testing before public scale. Independent financial and security review remains required.
+
+## PR #2 staging review follow-up
+
+- Replayed checkpoint history across 2024–2026, including a late-arriving observation and a later revised vintage. Tests verify that the earlier replay excludes future ingestion and that persisted evaluation evidence and alert transitions are not overwritten.
+- The monitor and API now label Data Confidence as an **operational coverage/quality index, not statistical certainty**. It remains distinct from the 0–100 reflexivity risk index.
+- Narrowed the staging trusted proxy from the whole Docker subnet to Caddy's pinned `172.30.51.10/32` address. Tested forged `X-SmartHedge-Client-IP` and `X-Forwarded-For` headers through Caddy, direct loopback API and another staging container. No fake-IP quota bucket was created.
+- Added a reproducible loopback-only load script and concurrent regression tests. Staging PostgreSQL-backed HTTP quota: **300 requests / 24 workers / 2.7 seconds; 240 returned 200, 60 returned 429; p50 185 ms, p95 349 ms**. Expired-counter cleanup removed exactly one test row. A temporary **staging-only** database outage produced a generic 503; health/dashboard recovered to 200 with the Treasury data retained after restart.
+- Final review validation: **48 Python tests passed**, Next.js build and sequential typecheck passed, **3 Playwright tests passed**. Merge-path verification is recorded in the PR after the review commits. Production remains untouched; staging volumes remain intact and the scheduler is stopped.

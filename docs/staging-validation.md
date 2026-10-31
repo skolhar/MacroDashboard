@@ -9,7 +9,11 @@
 5. Provision an expiring scoped credential with `docker compose ... exec api python -m packages.jobs.operators issue <operator-id> --scopes ingestion:run --days 30`. Store the raw token securely; the command shows it once. Use a separate `imports:write` credential for manual data review. Revoke immediately with `python -m packages.jobs.operators revoke <token-hash>`; `list` shows digests, never raw tokens.
 6. Run a reviewed Treasury import through the loopback API or start `docker compose --env-file /path/to/private-staging.env -f docker-compose.staging.yml --profile ingestion up -d --build scheduler`. The worker polls every six hours. Keep it stopped until source/entitlement review authorizes ongoing requests.
 
-The staging Caddy route returns 403 for administrative paths. For remote operator work, use an SSH tunnel to port 18000; do not expose that port or put an admin token in a URL. `TRUSTED_PROXY_CIDRS` matches only the isolated Compose network. Logs are separate under the staging Compose project; `docker compose ... logs api scheduler caddy` and `/api/v1/sources/health` show operational failures without returning secrets. API and web healthchecks are in the staging Compose file.
+The staging Caddy route returns 403 for administrative paths. For remote operator work, use an SSH tunnel to port 18000; do not expose that port or put an admin token in a URL. `TRUSTED_PROXY_CIDRS` matches only the pinned staging Caddy peer. Logs are separate under the staging Compose project; `docker compose ... logs api scheduler caddy` and `/api/v1/sources/health` show operational failures without returning secrets. API and web healthchecks are in the staging Compose file.
+
+Proxy trust is pinned to the staging Caddy container at `172.30.51.10/32`. The API ignores asserted client-IP headers from the host loopback mapping and other staging containers. Do not widen the CIDR to the whole Docker subnet. If the staging subnet or Caddy address changes, update both the Compose assignment and trusted CIDR, then rerun spoofing tests.
+
+Run the loopback-only quota check with `.venv/bin/python scripts/staging_rate_load.py`. It sends 300 requests with 24 workers, deliberately varies forged client-IP headers, checks that no more than 240 succeed in one minute, and reports p50/p95 latency. It refuses non-loopback targets. Run it only against isolated staging; repeat if a minute boundary interrupts the measurement.
 
 ## Rollback and rotation
 
@@ -24,3 +28,10 @@ The staging Caddy route returns 403 for administrative paths. For remote operato
 - Before ingestion, risk was N/A and data confidence was 0. Staging Caddy returned 403 for GET and POST to an admin path.
 - A scoped, one-day staging operator imported 21 October 2026 rows from the official Treasury XML endpoint. Repeating the import inserted 0 observations and reported 21 duplicates. The dashboard then showed one verified source-backed indicator, 6/100 data confidence and **no composite risk score**. This is a real staging ingestion, not merely a parser fixture.
 - The staging scheduler completed one further idempotent polling run. The local scheduler was stopped after validation. Production was not contacted, migrated or modified.
+
+## PR #2 review validation
+
+- Rebuilt isolated staging with Caddy pinned at `172.30.51.10`. The 300-request/24-worker HTTP check returned **240 × 200, 60 × 429**, p50 **185 ms**, p95 **349 ms** in one minute. No spoofed-IP rate bucket was created. A direct loopback API request with a forged header received 429 after the shared quota was exhausted; Caddy continued to return 403 for its admin route. A web-container direct request could reach API health but its forged header was ignored because that container is not the trusted Caddy peer.
+- Inserted an expired test counter in the isolated staging PostgreSQL database. `prune(retention_seconds=3600)` removed exactly that row and retained current counters.
+- Stopped only the isolated staging PostgreSQL container briefly: the API returned **503 Request admission unavailable** without leaking database details. Restarted the database; health and dashboard returned 200, with the verified Treasury observation still present. The staging volume was preserved.
+- The multi-year replay regression covers persisted events from 2024 through 2026 plus late-arriving and revised observations. Previously recorded event evidence and alert transitions remain unchanged. Replaying an earlier timestamp still sees the original vintage.
