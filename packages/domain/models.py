@@ -57,6 +57,10 @@ class Observation(Base):
     vintage_id: Mapped[str] = mapped_column(String(100))
     quality: Mapped[str] = mapped_column(String(30))
     is_revision: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_demo: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    source_identifier: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    source_reference: Mapped[str | None] = mapped_column(Text, nullable=True)
+    content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class RawSnapshot(Base):
@@ -103,3 +107,27 @@ class PolicyEvent(Base):
     source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(20))
     affected_indicators_json: Mapped[str] = mapped_column(Text)
+
+
+class IngestionRun(Base):
+    __tablename__ = "ingestion_runs"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    provider: Mapped[str] = mapped_column(String(100))
+    started_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    status: Mapped[str] = mapped_column(String(30))
+    item_count: Mapped[int] = mapped_column(Integer, default=0)
+    error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+
+class AlertTransition(Base):
+    __tablename__ = "alert_transitions"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    rule_id: Mapped[str] = mapped_column(String(100), index=True)
+    ruleset_version: Mapped[str] = mapped_column(String(40))
+    market: Mapped[str] = mapped_column(String(20))
+    mode: Mapped[str] = mapped_column(String(20))
+    status: Mapped[str] = mapped_column(String(30))
+    evaluated_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    evidence_json: Mapped[str] = mapped_column(Text)
+    deduplication_key: Mapped[str] = mapped_column(String(200), unique=True)

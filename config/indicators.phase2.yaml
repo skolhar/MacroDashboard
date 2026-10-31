@@ -1,0 +1,32 @@
+# Unconnected indicators remain DATA_UNAVAILABLE until a licensed or documented import exists.
+indicators:
+  - {id: nifty50_price, display_name: Nifty 50 index, cycle: earnings, unit: index_points, frequency: business_daily, transform: change_pct_60, source_priority: [licensed_vendor, manual_import]}
+  - {id: fpi_debt_net_inr, display_name: FPI debt net flow, cycle: flows, unit: INR_cr, frequency: business_daily, transform: rolling_sum_20, source_priority: [official_depository, manual_import]}
+  - {id: dii_equity_net_inr, display_name: DII equity net flow, cycle: flows, unit: INR_cr, frequency: business_daily, transform: rolling_sum_20, source_priority: [exchange_licensed, manual_import]}
+  - {id: fcnr_deposits_usd, display_name: FCNR(B) deposits, cycle: fx, unit: USD_bn, frequency: monthly, transform: change_pct_12, source_priority: [rbi, manual_import]}
+  - {id: midcap_mf_net_inr, display_name: Mid-cap fund net flow, cycle: flows, unit: INR_cr, frequency: monthly, transform: rolling_sum_3, source_priority: [amfi, manual_import]}
+  - {id: smallcap_mf_net_inr, display_name: Small-cap fund net flow, cycle: flows, unit: INR_cr, frequency: monthly, transform: rolling_sum_3, source_priority: [amfi, manual_import]}
+  - {id: sip_discontinuation_ratio, display_name: SIP discontinuation ratio, cycle: flows, unit: pct, frequency: monthly, transform: raw, source_priority: [amfi, manual_import]}
+  - {id: sip_registration_count, display_name: SIP new registrations, cycle: flows, unit: count, frequency: monthly, transform: raw, source_priority: [amfi, manual_import]}
+  - {id: india_cpi_yoy, display_name: India CPI YoY, cycle: energy, unit: pct, frequency: monthly, transform: raw, source_priority: [mospi, manual_import]}
+  - {id: india_repo_rate, display_name: India repo rate, cycle: energy, unit: pct, frequency: event, transform: raw, source_priority: [rbi, manual_import]}
+  - {id: current_account_pct_gdp, display_name: Current account / GDP, cycle: fx, unit: pct, frequency: quarterly, transform: raw, source_priority: [rbi, manual_import]}
+  - {id: net_services_exports_usd, display_name: Net services exports, cycle: fx, unit: USD_bn, frequency: quarterly, transform: change_pct_4, source_priority: [rbi, manual_import]}
+  - {id: india_software_services_exports_usd, display_name: Software services exports, cycle: it, unit: USD_bn, frequency: annual, transform: change_pct_1, source_priority: [rbi, manual_import]}
+  - {id: it_major_usd_revenue_growth, display_name: IT major USD revenue growth, cycle: it, unit: pct, frequency: quarterly, transform: raw, source_priority: [company_filings, manual_import]}
+  - {id: tcs_usd_revenue_growth, display_name: TCS USD revenue growth, cycle: it, unit: pct, frequency: quarterly, transform: raw, source_priority: [company_filings, manual_import]}
+  - {id: infosys_usd_revenue_growth, display_name: Infosys USD revenue growth, cycle: it, unit: pct, frequency: quarterly, transform: raw, source_priority: [company_filings, manual_import]}
+  - {id: hcltech_usd_revenue_growth, display_name: HCLTech USD revenue growth, cycle: it, unit: pct, frequency: quarterly, transform: raw, source_priority: [company_filings, manual_import]}
+  - {id: wipro_usd_revenue_growth, display_name: Wipro USD revenue growth, cycle: it, unit: pct, frequency: quarterly, transform: raw, source_priority: [company_filings, manual_import]}
+  - {id: techmahindra_usd_revenue_growth, display_name: Tech Mahindra USD revenue growth, cycle: it, unit: pct, frequency: quarterly, transform: raw, source_priority: [company_filings, manual_import]}
+  - {id: it_major_headcount_yoy, display_name: IT major employee growth, cycle: it, unit: pct, frequency: quarterly, transform: raw, source_priority: [company_filings, manual_import]}
+  - {id: it_major_operating_margin, display_name: IT major operating margin, cycle: it, unit: pct, frequency: quarterly, transform: raw, source_priority: [company_filings, manual_import]}
+  - {id: it_ai_revenue_share, display_name: Disclosed IT AI revenue share, cycle: it, unit: pct, frequency: quarterly, transform: raw, source_priority: [company_filings, manual_import]}
+  - {id: it_ai_deal_tcv_usd, display_name: Disclosed IT AI deal TCV, cycle: it, unit: USD_bn, frequency: quarterly, transform: raw, source_priority: [company_filings, manual_import]}
+  - {id: it_ai_pricing_pressure, display_name: Verified IT AI pricing pressure, cycle: it, unit: score, frequency: quarterly, transform: raw, source_priority: [analyst_reviewed_import]}
+  - {id: nasdaq100_price, display_name: Nasdaq 100 index, cycle: global, unit: index_points, frequency: business_daily, transform: change_pct_60, source_priority: [licensed_vendor, manual_import]}
+  - {id: us_ig_oas, display_name: US investment-grade OAS, cycle: global, unit: bps, frequency: business_daily, transform: raw, source_priority: [licensed_vendor, manual_import]}
+  - {id: us_high_yield_oas, display_name: US high-yield OAS, cycle: global, unit: bps, frequency: business_daily, transform: raw, source_priority: [licensed_vendor, manual_import]}
+  - {id: hyperscaler_capex_guidance_growth, display_name: Hyperscaler capex guidance growth, cycle: global, unit: pct, frequency: quarterly, transform: raw, source_priority: [company_filings, manual_import]}
+  - {id: market_breadth_pct_above_200dma, display_name: Breadth above 200DMA, cycle: earnings, unit: pct, frequency: business_daily, transform: raw, source_priority: [licensed_vendor, manual_import]}
+  - {id: nifty50_trailing_pe, display_name: Nifty trailing P/E, cycle: earnings, unit: multiple, frequency: business_daily, transform: percentile_252, source_priority: [licensed_vendor, manual_import]}

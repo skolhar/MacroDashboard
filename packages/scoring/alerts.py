@@ -18,7 +18,7 @@ def fx_alert(session, as_of, demo=True, vintage_mode="system_known"):
         known_count = 0
         for id, condition in rule["conditions"].items():
             metric = metrics[id]
-            value = metric["feature"] if metric["status"] == "demo" else None
+            value = metric["feature"] if metric["status"] in {"demo", "verified", "revised"} else None
             if condition["op"] == "contextual":
                 result = None
             elif value is None:

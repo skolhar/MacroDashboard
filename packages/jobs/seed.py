@@ -59,10 +59,12 @@ def seed(session):
             exists = session.scalar(select(Observation.id).where(Observation.indicator_id == id, Observation.vintage_id == vintage))
             if exists:
                 continue
-            session.add(Observation(indicator_id=id, period_start=d, period_end=period_end, value=Decimal(str(round(synthetic_value(id, n), 5))), unit=item["unit"], published_at=released, ingested_at=released + timedelta(minutes=10), provider="synthetic_fixture", source_url=None, vintage_id=vintage, quality="demo", is_revision=False))
+            session.add(Observation(indicator_id=id, period_start=d, period_end=period_end, value=Decimal(str(round(synthetic_value(id, n), 5))), unit=item["unit"], published_at=released, ingested_at=released + timedelta(minutes=10), provider="synthetic_fixture", source_url=None, vintage_id=vintage, quality="demo", is_revision=False, is_demo=True, source_identifier="synthetic_fixture", source_reference="fixtures/demo/README.md"))
     session.commit()
 
 
 if __name__ == "__main__":
-    with Session(engine()) as session:
-        seed(session)
+    from packages.domain.settings import settings
+    if settings().environment == "demo" and settings().demo_mode:
+        with Session(engine()) as session:
+            seed(session)

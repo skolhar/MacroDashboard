@@ -2,9 +2,9 @@ services:
   db:
     image: postgres:16
     environment:
-      POSTGRES_DB: macro
-      POSTGRES_USER: macro
-      POSTGRES_PASSWORD: macro
+      POSTGRES_DB: ${POSTGRES_DB:-macro}
+      POSTGRES_USER: ${POSTGRES_USER:-macro}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U macro"]
       interval: 3s
@@ -16,9 +16,10 @@ services:
       context: .
       dockerfile: Dockerfile.api
     environment:
-      DATABASE_URL: postgresql+psycopg://macro:macro@db:5432/macro
-      DEMO_MODE: "true"
-      ADMIN_TOKEN: ${ADMIN_TOKEN:-local-demo-token}
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env}
+      APP_ENV: ${APP_ENV:-demo}
+      DEMO_MODE: ${DEMO_MODE:-true}
+      ADMIN_TOKEN_SHA256: ${ADMIN_TOKEN_SHA256:-}
     depends_on:
       db:
         condition: service_healthy

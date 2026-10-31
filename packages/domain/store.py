@@ -3,10 +3,11 @@ from datetime import datetime, timezone
 from sqlalchemy import create_engine, select, func
 from sqlalchemy.orm import Session
 from .models import IndicatorDefinition, Observation
+from .settings import settings
 
 
 def engine():
-    return create_engine(os.getenv("DATABASE_URL", "sqlite:///./macro.db"), pool_pre_ping=True)
+    return create_engine(settings().database_url, pool_pre_ping=True)
 
 
 def observations_at(session: Session, indicator_id: str, as_of: datetime, mode="system_known", demo=True):
@@ -19,7 +20,7 @@ def observations_at(session: Session, indicator_id: str, as_of: datetime, mode="
     if demo:
         query = query.where(Observation.quality == "demo")
     else:
-        query = query.where(Observation.quality != "demo")
+        query = query.where(Observation.quality != "demo", Observation.is_demo.is_(False))
     records = session.scalars(query.order_by(Observation.period_end, Observation.published_at, Observation.ingested_at)).all()
     latest = {}
     for row in records:
