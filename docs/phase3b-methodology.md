@@ -1,0 +1,19 @@
+# Indian external-liquidity methodology: Phase 3B
+
+## Source definitions
+
+The `usd_inr_spot` legacy ID is retained for Phase 1/2 API compatibility. For an RBI or FBIL row its `rate_kind` is `published_reference_rate` and the monitor names the publisher. RBI's last reference-rate publication was 9 July 2018; FBIL took over 10 July 2018. The value is a published fixing, not a continuously tradable USD/INR spot price. A licensed vendor's rate requires its own explicit definition. The 20-session percentage change, 2%/4% scoring bands and 2% alert threshold remain **provisional**; they have not been validated as predictors on this reference-rate series. Rolling transformations fail closed across missing sessions or a change of rate provider/kind.
+
+Gross RBI reserves are published USD stocks, not an intervention-only flow. Changes reflect valuation and other components. The weekly WSS series must carry its own definition version. The RBI net forward position remains contextual and unavailable for ingestion/scoring: independently reconcile purchases and sales, asset and liability signs, gross versus net definitions, maturity buckets and accounting dates across original RBI Table 4/4A vintages before enabling it. Do not calculate forward-adjusted reserves or subtract a signed forward liability from gross reserves until reviewed.
+
+The India 10-year series is a daily benchmark yield in percent; a 0.10 percentage-point move equals 10 basis points. The RBI bulletin's monthly end-period FIMMDA benchmark must remain a distinct series. A monthly row cannot satisfy the daily 20-session transformation. Benchmark succession and historical methodology changes require a new definition version and a discontinuity review.
+
+NSDL confirmed custodian flows and provisional exchange trade reports have different effective dates and settlement conventions. Monthly cumulative data are not daily net flows. The reviewed import accepts a declared `nsdl-confirmed-custodian-*` or `nsdl-provisional-exchange-*` definition and checks quality accordingly; it rejects multi-day rows for the daily IDs. Rolling windows crossing definitions fail closed. An actual revision creates a new vintage with its own original release evidence and publication timestamp. DII or exchange-reported institutional data cannot stand in for FPI.
+
+## Historical correctness and alert interpretation
+
+Every reviewed observation stores period, source publication timestamp, actual SmartHedge ingestion timestamp, source URL, quality, original publisher-byte hash, definition/vintage and approval record. `source_known` answers what the publisher had released by an evaluation timestamp; `system_known` answers what SmartHedge had ingested by then. Historical backfills cannot retroactively become system-known. A hash match only confirms that submitted original bytes match retained bytes.
+
+The external monitor reports cross-signal status as `UNKNOWN`, `MET` or `COUNTER`. A missing or stale FPI, reserves or oil observation is `UNKNOWN`; it is never evidence that pressure is absent. A depreciating reference rate alone does not imply a reflexive FX loop. The FX risk cycle and composite remain N/A if configured coverage is insufficient. The Data Confidence Score is an operational coverage/quality index, not statistical certainty or a forecast probability. All thresholds and classifications remain exploratory until source-backed point-in-time histories permit review.
+
+Historical daily sessions for India are presently verified only for 2026 in `config/calendars.yaml`. Scoring fails closed for 2018–2025 rather than inventing trading sessions. See `docs/calendar-maintenance.md` for the calendar review process. The gap report lists absent months across the whole period and exact daily gaps only where a verified calendar exists.
