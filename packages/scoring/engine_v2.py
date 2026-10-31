@@ -12,7 +12,7 @@ def _freshness(row, definition, as_of, indicator_id):
         return "DATA_UNAVAILABLE"
     if definition["frequency"] == "business_daily":
         market = market_for(indicator_id)
-        local_now = as_of.astimezone(ZoneInfo("America/New_York" if market == "us" else "Asia/Kolkata"))
+        local_now = as_of.astimezone(ZoneInfo("America/New_York" if market.startswith("us") else "Asia/Kolkata"))
         sessions = sessions_between(row.period_end, local_now.date(), market)
         if sessions is None:
             return "CALENDAR_UNVERIFIED"
@@ -23,6 +23,21 @@ def _freshness(row, definition, as_of, indicator_id):
     elif (as_of - row.published_at).total_seconds() > definition["max_age_hours"] * 3600:
         return "stale"
     return "demo" if row.quality == "demo" else row.quality
+
+
+def covered_weighted_score(weighted_scores, minimum_coverage=0.7):
+    """Normalize only observed signal weights; fail closed below coverage floor."""
+    covered = sum(weight for score, weight in weighted_scores if score is not None)
+    if covered < 100 * minimum_coverage or not covered:
+        return None, covered / 100
+    return round(sum(score * weight for score, weight in weighted_scores if score is not None) / covered, 2), covered / 100
+
+
+def composite_score(cycles, coverage):
+    """Use fixed cycle weights only when every configured cycle is scoreable."""
+    if coverage < 0.75 or any(c["score"] is None for c in cycles) or sum(c["weight"] for c in cycles) != 100:
+        return None
+    return round(sum(c["score"] * c["weight"] for c in cycles) / 100, 2)
 
 
 def _core(session, as_of, demo, vintage_mode):
@@ -44,25 +59,21 @@ def _core(session, as_of, demo, vintage_mode):
     for cycle_id, cycle_weight in cfg["cycle_weights"].items():
         signals = cfg["cycle_signals"][cycle_id]
         contributors = []
-        covered = 0
-        numerator = 0
+        weighted_scores = []
         confirmations = 0
         for id, rule in signals.items():
             value = features.get(id)
             score = risk(value, rule["green"], rule["amber"], rule["red"]) if value is not None else None
             contributors.append({"indicator_id": id, "feature": value, "score": round(score, 2) if score is not None else None, "weight": rule["weight"], "status": "available" if score is not None else "unavailable", "thresholds": {k: rule[k] for k in ("green", "amber", "red")}})
+            weighted_scores.append((score, rule["weight"]))
             if score is not None:
-                covered += rule["weight"]
-                numerator += score * rule["weight"]
                 confirmations += int(score >= 50)
-        coverage = covered / 100
+        score, coverage = covered_weighted_score(weighted_scores)
         weighted_coverage += cycle_weight * coverage
-        score = round(numerator / covered, 2) if coverage >= .7 else None
         cycles.append({"id": cycle_id, "weight": cycle_weight, "score": score, "coverage": coverage, "level_risk": score, "confirmation": {"stressed_signals": confirmations, "available_signals": sum(c["score"] is not None for c in contributors)}, "confidence": "insufficient" if score is None else ("demo" if demo else "provisional" if coverage < 1 else "verified_inputs_provisional_rules"), "status": "insufficient" if score is None else "provisional", "adjustment": 0, "contributors": contributors, "reason": "Coverage below 70%" if score is None else None})
     coverage = weighted_coverage / 100
-    valid = {c["id"] for c in cycles if c["score"] is not None}
-    sufficient = coverage >= .75 and len(valid) == 6 and {"fx", "flows", "earnings"} <= valid
-    overall_score = round(sum(c["score"] * c["weight"] for c in cycles) / 100, 2) if sufficient else None
+    overall_score = composite_score(cycles, coverage)
+    sufficient = overall_score is not None
     regime = "insufficient_data" if overall_score is None else next(label for limit, label in [(25, "Supportive"), (45, "Watchful"), (65, "Fragile"), (80, "High stress"), (100, "Reflexive stress")] if overall_score <= limit)
     return {"as_of": as_of.isoformat(), "mode": "demo" if demo else "live", "ruleset_version": "v2", "overall": {"score": overall_score, "regime": regime, "coverage": round(coverage, 4), "reason": None if sufficient else "One or more required cycles lack 70% signal coverage; weights were not redistributed"}, "cycles": cycles, "metrics": metrics, "source_health": {"stale_count": sum(m["status"] == "stale" for m in metrics), "unavailable_count": sum(m["status"] == "DATA_UNAVAILABLE" for m in metrics), "calendar_unverified_count": sum(m["status"] == "CALENDAR_UNVERIFIED" for m in metrics)}, "warnings": ["Thresholds are provisional, not calibrated investment signals"] + (["Synthetic DEMO observations"] if demo else []), "features": features}
 

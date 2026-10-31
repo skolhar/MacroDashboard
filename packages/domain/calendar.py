@@ -10,12 +10,14 @@ def calendar_data():
 
 
 def market_for(indicator_id: str) -> str:
+    if indicator_id == "us_10y_yield":
+        return "us_treasury"
     return "us" if indicator_id.startswith(("us_", "nasdaq", "dxy", "hyperscaler")) else "india"
 
 
 def is_session(day: date, market: str) -> bool | None:
     year = calendar_data()[market].get(str(day.year))
-    if year is None:
+    if year is None or not year.get("verified", True):
         return None
     if day in year["special_open"]:
         return True
@@ -38,7 +40,10 @@ def recent_sessions(as_of: datetime, market: str, count: int) -> list[date]:
     day = as_of.date()
     result = []
     for _ in range(370):
-        if is_session(day, market):
+        session = is_session(day, market)
+        if session is None:
+            break
+        if session:
             result.append(day)
             if len(result) >= count:
                 break

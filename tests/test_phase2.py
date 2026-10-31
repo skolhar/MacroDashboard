@@ -5,7 +5,7 @@ from sqlalchemy import select
 from packages.connectors.base import DataUnavailable, SourceObservation, UnavailableAdapter
 from packages.connectors.manual import parse_manual_csv
 from packages.connectors.treasury import parse_treasury_xml
-from packages.domain.calendar import is_session
+from packages.domain.calendar import is_session, market_for, recent_sessions
 from packages.domain.calendar import sessions_between
 from packages.domain.config import registry, rules
 from packages.domain.models import Observation
@@ -14,7 +14,7 @@ from packages.domain.store import observations_at
 from packages.jobs.ingest import ingest_records
 from packages.jobs.sync_registry import sync_registry
 from packages.scoring.engine_v2 import compute_v2
-from packages.scoring.engine_v2 import _freshness
+from packages.scoring.engine_v2 import _freshness, covered_weighted_score, composite_score
 from packages.scoring.inflections import status_for_evaluations, persist_transitions
 
 
@@ -132,6 +132,16 @@ def test_v2_coverage_and_reproducibility(db):
     assert next(c for c in demo_first["cycles"] if c["id"] == "earnings")["score"] is not None
 
 
+def test_partial_indicator_coverage_never_imputes_missing_risk_as_zero():
+    score, coverage = covered_weighted_score([(80, 70), (None, 30)])
+    assert (score, coverage) == (80, 0.7)
+    cycles = [{"score": score, "weight": weight} for weight in (25, 20, 20, 20, 10, 5)]
+    assert composite_score(cycles, 0.925) == 80
+    cycles[4]["score"] = None
+    assert composite_score(cycles, 0.825) is None
+    assert covered_weighted_score([(80, 69), (None, 31)])[0] is None
+
+
 def test_alert_persistence_and_hysteresis():
     rule = rules("v2")["alerts"][0]
     assert status_for_evaluations([(4, 2)], rule)[0] == "UNKNOWN"
@@ -141,6 +151,51 @@ def test_alert_persistence_and_hysteresis():
     assert status_for_evaluations([(4, 4)] * 5 + [(4, 0)] * 4, rule)[0] == "CONFIRMED"
     assert status_for_evaluations([(4, 4)] * 5 + [(4, 0)] * 5, rule)[0] == "RESOLVED"
     assert status_for_evaluations([(4, 3)] * 3 + [(0, 0)], rule)[0] == "TRIGGERED"
+
+
+def test_long_alert_lifecycle_missing_publications_and_repeated_evaluation():
+    rule = rules("v2")["alerts"][0]
+    history = [(4, 4)] * 18 + [(4, 0)] * 4 + [(0, 0)] + [(4, 0)] * 4
+    assert len(history) > 15
+    assert status_for_evaluations(history, rule)[0] == "CONFIRMED"
+    assert status_for_evaluations(history + [(4, 0)], rule)[0] == "RESOLVED"
+    assert status_for_evaluations(history, rule) == status_for_evaluations(history, rule)
+
+
+def test_alert_replay_uses_more_than_fifteen_sessions(monkeypatch):
+    import packages.scoring.inflections as inflections
+    from zoneinfo import ZoneInfo
+    seen = []
+    def sessions(as_of, market, count):
+        seen.append(count)
+        return [date(2026, 9, 1) + timedelta(days=n) for n in range(25)]
+    monkeypatch.setattr(inflections, "recent_sessions", sessions)
+    instants = inflections._times(None, rules("v2")["alerts"][0], datetime(2026, 10, 1, tzinfo=ZoneInfo("Asia/Kolkata")), False, "system_known")
+    assert seen == [60]
+    assert len(instants) == 25
+
+
+def test_it_alert_requires_distinct_quarterly_releases():
+    rule = rules("v2")["alerts"][-1]
+    assert rule["cadence"] == "publication"
+    assert "watch_days" not in rule
+    assert status_for_evaluations([(4, 4)] * 2, rule)[0] == "WATCH"
+    assert status_for_evaluations([(4, 4)] * 3, rule)[0] == "TRIGGERED"
+    assert status_for_evaluations([(4, 4)] * 4, rule)[0] == "CONFIRMED"
+    assert status_for_evaluations([(4, 4)] * 4 + [(4, 0)] * 2, rule)[0] == "RESOLVED"
+
+
+def test_it_release_clock_ignores_revisions_and_daily_rechecks():
+    import packages.scoring.inflections as inflections
+    from types import SimpleNamespace
+    rows = [SimpleNamespace(period_end=date(2026, 3, 31), published_at=datetime(2026, 5, 1, tzinfo=timezone.utc), ingested_at=datetime(2026, 5, 2, tzinfo=timezone.utc)),
+            SimpleNamespace(period_end=date(2026, 3, 31), published_at=datetime(2026, 5, 5, tzinfo=timezone.utc), ingested_at=datetime(2026, 5, 6, tzinfo=timezone.utc)),
+            SimpleNamespace(period_end=date(2026, 6, 30), published_at=datetime(2026, 8, 1, tzinfo=timezone.utc), ingested_at=datetime(2026, 8, 2, tzinfo=timezone.utc))]
+    first = inflections.release_instants(rows, datetime(2026, 8, 3, tzinfo=timezone.utc), "system_known")
+    later = inflections.release_instants(rows, datetime(2026, 8, 20, tzinfo=timezone.utc), "system_known")
+    assert len(first) == len(later) == 2
+    assert first == later
+    assert first[0] == datetime(2026, 5, 2, 0, 1, tzinfo=timezone.utc)
 
 
 def test_alert_history_deduplicates_and_records_version(db):
@@ -155,6 +210,12 @@ def test_calendar_and_forward_sign_guard():
     assert is_session(date(2026, 2, 1), "india") is True
     assert is_session(date(2026, 11, 26), "us") is False
     assert is_session(date(2027, 1, 4), "india") is None
+    assert is_session(date(2027, 3, 26), "us") is False
+    assert is_session(date(2027, 10, 11), "us") is True
+    assert is_session(date(2027, 10, 11), "us_treasury") is False
+    assert is_session(date(2027, 12, 24), "us") is False
+    assert market_for("us_10y_yield") == "us_treasury"
+    assert recent_sessions(datetime(2027, 1, 4, tzinfo=timezone.utc), "india", 5) == []
     assert sessions_between(date(2026, 10, 19), date(2026, 10, 20), "india") == 0
     assert "rbi_net_forward_usd" not in rules("v2")["cycle_signals"]["fx"]
     assert registry(True)["rbi_net_forward_usd"]["direction_of_stress"] == "contextual"
@@ -182,6 +243,24 @@ def test_api_auth_and_live_mode_never_falls_back_to_demo(db, monkeypatch):
     assert response.json()["mode"] == "live"
     assert response.json()["overall"]["coverage"] == 0
     assert client.post("/api/v1/admin/imports/csv").status_code == 401
+
+
+def test_shared_admin_token_and_local_rate_limiter_limits(monkeypatch):
+    from fastapi import HTTPException
+    from packages.domain.security import RateLimiter, require_admin
+    from packages.domain.settings import token_digest
+    monkeypatch.setenv("ADMIN_TOKEN_SHA256", token_digest("test-operator-secret"))
+    assert require_admin("test-operator-secret") == {"role": "admin"}
+    for token in (None, "wrong-token"):
+        try:
+            require_admin(token)
+            assert False, "invalid token accepted"
+        except HTTPException as exc:
+            assert exc.status_code == 401
+    one, two = RateLimiter(), RateLimiter()
+    assert one.allow("operator:write", 1)
+    assert not one.allow("operator:write", 1)
+    assert two.allow("operator:write", 1) # documents independent process state
 
 
 def test_authenticated_manual_import_requires_license_attestation(db, monkeypatch):

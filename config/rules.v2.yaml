@@ -115,10 +115,10 @@ alerts:
     watch_count: 2
     trigger_count: 3
     confirm_count: 4
-    watch_days: 2
-    trigger_days: 3
-    confirm_days: 4
-    recovery_days: 2
+    watch_releases: 2
+    trigger_releases: 3
+    confirm_releases: 4
+    recovery_releases: 2
     conditions:
       it_major_usd_revenue_growth: {op: lte, value: 3}
       india_software_services_exports_usd: {op: lte, value: 3}
