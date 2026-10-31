@@ -1,0 +1,105 @@
+from datetime import date, datetime, timezone
+from decimal import Decimal
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy.types import TypeDecorator
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class UTCDateTime(TypeDecorator):
+    impl = DateTime(timezone=True)
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            raise ValueError("Timestamp requires timezone")
+        return value.astimezone(timezone.utc)
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return None
+        return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
+
+class IndicatorDefinition(Base):
+    __tablename__ = "indicator_definitions"
+    id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    display_name: Mapped[str] = mapped_column(String(150))
+    cycle: Mapped[str] = mapped_column(String(30))
+    unit: Mapped[str] = mapped_column(String(40))
+    frequency: Mapped[str] = mapped_column(String(40))
+    direction_of_stress: Mapped[str] = mapped_column(String(30))
+    max_age_hours: Mapped[int] = mapped_column(Integer)
+    publication_lag_days: Mapped[int] = mapped_column(Integer)
+    transform: Mapped[str] = mapped_column(String(50))
+    required_for_score: Mapped[bool] = mapped_column(Boolean)
+    source_priority: Mapped[str] = mapped_column(Text)
+
+
+class Observation(Base):
+    __tablename__ = "observations"
+    __table_args__ = (UniqueConstraint("indicator_id", "period_start", "period_end", "provider", "vintage_id"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    indicator_id: Mapped[str] = mapped_column(ForeignKey("indicator_definitions.id"), index=True)
+    period_start: Mapped[date] = mapped_column(Date)
+    period_end: Mapped[date] = mapped_column(Date)
+    value: Mapped[Decimal] = mapped_column(Numeric(24, 8))
+    unit: Mapped[str] = mapped_column(String(40))
+    published_at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
+    ingested_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    provider: Mapped[str] = mapped_column(String(100))
+    source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    vintage_id: Mapped[str] = mapped_column(String(100))
+    quality: Mapped[str] = mapped_column(String(30))
+    is_revision: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class RawSnapshot(Base):
+    __tablename__ = "raw_snapshots"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    provider: Mapped[str] = mapped_column(String(100))
+    content_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    received_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class ScoreSnapshot(Base):
+    __tablename__ = "score_snapshots"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    as_of: Mapped[datetime] = mapped_column(UTCDateTime)
+    ruleset_version: Mapped[str] = mapped_column(String(40))
+    total_score: Mapped[Decimal | None] = mapped_column(Numeric(6, 2), nullable=True)
+    coverage: Mapped[Decimal] = mapped_column(Numeric(5, 4))
+    payload_json: Mapped[str] = mapped_column(Text)
+
+
+class AlertEvent(Base):
+    __tablename__ = "alert_events"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    rule_id: Mapped[str] = mapped_column(String(100))
+    ruleset_version: Mapped[str] = mapped_column(String(40))
+    status: Mapped[str] = mapped_column(String(30))
+    severity: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    start_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    end_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    fired_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    confirmed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    evidence_json: Mapped[str] = mapped_column(Text)
+    deduplication_key: Mapped[str] = mapped_column(String(200), unique=True)
+    acknowledged_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+
+class PolicyEvent(Base):
+    __tablename__ = "policy_events"
+    id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    event_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    type: Mapped[str] = mapped_column(String(60))
+    description: Mapped[str] = mapped_column(Text)
+    source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(20))
+    affected_indicators_json: Mapped[str] = mapped_column(Text)

@@ -1,0 +1,12 @@
+smarthedge.in {
+    encode zstd gzip
+
+    @api path /api/v1/* /docs /docs/* /redoc /redoc/* /openapi.json
+    handle @api {
+        reverse_proxy api:8000
+    }
+
+    handle {
+        reverse_proxy web:3000
+    }
+}

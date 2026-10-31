@@ -1,0 +1,10 @@
+.git
+.venv
+apps/web/node_modules
+apps/web/.next
+apps/web/test-results
+apps/web/playwright-report
+__pycache__
+.pytest_cache
+*.pyc
+MacroDashboard.md

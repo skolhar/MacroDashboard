@@ -1,0 +1,33 @@
+version: v1
+calibration: provisional
+cycle_weights: {fx: 25, energy: 20, flows: 20, earnings: 20, it: 10, global: 5}
+cycle_signals:
+  fx:
+    usd_inr_spot: {weight: 60, green: 0, amber: 2, red: 4}
+    fx_gross_reserves_usd: {weight: 40, green: 0, amber: -3, red: -7}
+  energy:
+    brent_usd: {weight: 50, green: 80, amber: 100, red: 120}
+    india_10y_yield: {weight: 50, green: 0, amber: 25, red: 60}
+  flows:
+    fpi_equity_net_inr: {weight: 60, green: 0, amber: -15000, red: -40000}
+    sip_contribution_inr: {weight: 40, green: 12, amber: 3, red: -5}
+  earnings:
+    midcap150_pe: {weight: 30, green: 50, amber: 80, red: 95}
+    smallcap250_pe: {weight: 30, green: 50, amber: 80, red: 95}
+    nifty_eps_revision_3m: {weight: 40, green: 2, amber: 0, red: -5}
+  it: {}
+  global:
+    us_10y_yield: {weight: 50, green: 0, amber: 25, red: 60}
+    dxy: {weight: 50, green: 0, amber: 2, red: 4}
+fx_alert:
+  id: FX_LOOP_WATCH
+  min_conditions: 3
+  persistence_days: 2
+  critical_conditions: 4
+  critical_persistence_days: 5
+  conditions:
+    usd_inr_spot: {op: gte, value: 2}
+    fpi_equity_net_inr: {op: lte, value: -15000}
+    brent_usd: {op: gte, value: 100}
+    fx_gross_reserves_usd: {op: lte, value: -3}
+    rbi_net_forward_usd: {op: contextual, value: null}

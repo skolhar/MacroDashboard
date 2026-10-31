@@ -1,0 +1,51 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: macro
+      POSTGRES_USER: macro
+      POSTGRES_PASSWORD: macro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U macro"]
+      interval: 3s
+      retries: 20
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    environment:
+      DATABASE_URL: postgresql+psycopg://macro:macro@db:5432/macro
+      DEMO_MODE: "true"
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-local-demo-token}
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8000:8000"
+  web:
+    build: ./apps/web
+    environment:
+      API_INTERNAL_URL: http://api:8000
+      API_DOCS_URL: ${API_DOCS_URL:-http://localhost:8000/docs}
+    depends_on: [api]
+    ports:
+      - "127.0.0.1:3000:3000"
+  caddy:
+    image: caddy:2
+    profiles: [production]
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [api, web]
+    restart: unless-stopped
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:
