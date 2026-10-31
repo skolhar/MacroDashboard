@@ -34,12 +34,18 @@ def external_liquidity_view(dashboard: dict) -> dict:
     elif fpi is True and (reserves is True or oil is True):
         classification = "REINFORCING_STRESS_WATCH"
         explanation = "Depreciation, foreign equity selling, and reserve decline or elevated oil coincide. This is a provisional feedback-loop watch, not proof of causality."
-    elif fpi is True:
-        classification = "EXTERNAL_FINANCING_PRESSURE"
-        explanation = "Depreciation and foreign equity selling coincide; reserve and oil evidence does not establish a reinforcing liquidity loop."
+    elif fpi is None:
+        classification = "AWAITING_FOREIGN_FLOW_EVIDENCE"
+        explanation = "Depreciation is observed, but FPI flow evidence is missing or stale. No external-financing conclusion can be drawn."
+    elif fpi is False:
+        classification = "DEPRECIATION_WITH_COUNTER_FLOW_EVIDENCE"
+        explanation = "Depreciation is observed while eligible FPI flow data contradicts the foreign-selling condition. Managed adjustment remains possible."
+    elif reserves is None or oil is None:
+        classification = "FINANCING_PRESSURE_AWAITING_LIQUIDITY_EVIDENCE"
+        explanation = "Depreciation and foreign selling coincide, but reserve or oil confirmation is missing or stale. The absent signal is unknown, not contradictory."
     else:
-        classification = "DEPRECIATION_WITHOUT_CONFIRMED_PRESSURE"
-        explanation = "Depreciation alone may reflect managed adjustment. Foreign selling and external-liquidity confirmation are absent or unavailable."
+        classification = "FINANCING_PRESSURE_WITH_COUNTER_LIQUIDITY_EVIDENCE"
+        explanation = "Depreciation and foreign selling coincide, but observed reserves and oil do not meet the provisional liquidity-stress conditions."
     fx_cycle = next(item for item in dashboard["cycles"] if item["id"] == "fx")
     alert = next((item for item in dashboard["alerts"] if item["rule_id"] == "RUPEE_STRESS"), None)
     return {
@@ -50,6 +56,7 @@ def external_liquidity_view(dashboard: dict) -> dict:
         "expectations_evidence": "UNAVAILABLE: observed prices and flows cannot establish investor expectations or RBI intervention motives",
         "forward_interpretation": "CONTEXT_ONLY: gross reserves are not netted with RBI forward positions until signs, maturity buckets, and definitions are validated",
         "signals": {"depreciation": fx, "foreign_equity_selling": fpi, "gross_reserve_decline": reserves, "elevated_oil": oil},
+        "evidence_status": {"depreciation": "UNKNOWN" if fx is None else "MET" if fx else "COUNTER", "foreign_equity_selling": "UNKNOWN" if fpi is None else "MET" if fpi else "COUNTER", "gross_reserve_decline": "UNKNOWN" if reserves is None else "MET" if reserves else "COUNTER", "elevated_oil": "UNKNOWN" if oil is None else "MET" if oil else "COUNTER"},
         "alert": alert,
         "thresholds": {key: value for key, value in thresholds.items() if key in {"usd_inr_spot", "fpi_equity_net_inr", "brent_usd", "fx_gross_reserves_usd"}},
         "warning": "Exploratory risk index with provisional thresholds; no causal or predictive claim",

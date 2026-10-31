@@ -8,7 +8,7 @@ from packages.domain.models import OperatorCredential
 from packages.domain.settings import token_digest
 from packages.domain.store import engine
 
-SCOPES = {"imports:write", "ingestion:run"}
+SCOPES = {"imports:write", "ingestion:run", "releases:approve"}
 
 
 def issue(session: Session, operator_id: str, scopes: set[str], days: int, token: str | None = None) -> str:

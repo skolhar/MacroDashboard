@@ -1,16 +1,21 @@
 """Phase 3A provenance, conservative interpretation, and replay regressions."""
 import hashlib
 import base64
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import select
 
 from packages.connectors.india_release import ReleaseManifest, parse_release_package
-from packages.domain.models import Observation
+from packages.connectors.base import SourceObservation
+from packages.domain.calendar import recent_sessions
+from packages.domain.models import Observation, SourceReleaseReview
 from packages.domain.store import observations_at
 from packages.jobs.ingest import ingest_records
 from packages.jobs.operators import issue
+from packages.jobs.sync_registry import sync_registry
 from packages.scoring.external_liquidity import external_liquidity_view
 
 UTC = timezone.utc
@@ -62,8 +67,11 @@ def _dashboard(fx=None, fpi=None, reserves=None, oil=None):
 
 def test_fx_classification_requires_independent_confirmations():
     assert external_liquidity_view(_dashboard())["classification"] == "INSUFFICIENT_EVIDENCE"
-    assert external_liquidity_view(_dashboard(fx=3))["classification"] == "DEPRECIATION_WITHOUT_CONFIRMED_PRESSURE"
-    assert external_liquidity_view(_dashboard(fx=3, fpi=-20000))["classification"] == "EXTERNAL_FINANCING_PRESSURE"
+    assert external_liquidity_view(_dashboard(fx=3))["classification"] == "AWAITING_FOREIGN_FLOW_EVIDENCE"
+    assert external_liquidity_view(_dashboard(fx=3, fpi=1000))["classification"] == "DEPRECIATION_WITH_COUNTER_FLOW_EVIDENCE"
+    assert external_liquidity_view(_dashboard(fx=3, fpi=-20000))["classification"] == "FINANCING_PRESSURE_AWAITING_LIQUIDITY_EVIDENCE"
+    assert external_liquidity_view(_dashboard(fx=3, fpi=-20000, reserves=-1, oil=90))["classification"] == "FINANCING_PRESSURE_WITH_COUNTER_LIQUIDITY_EVIDENCE"
+    assert external_liquidity_view(_dashboard(fx=3, fpi=-20000, reserves=-1))["evidence_status"]["elevated_oil"] == "UNKNOWN"
     stressed = external_liquidity_view(_dashboard(fx=3, fpi=-20000, reserves=-4, oil=110))
     assert stressed["classification"] == "REINFORCING_STRESS_WATCH"
     assert stressed["cycle"]["score"] is None  # no invented score from the narrative classification
@@ -79,15 +87,92 @@ def test_release_api_requires_scoped_operator_and_original_hash(db, monkeypatch)
     monkeypatch.setenv("OPERATOR_AUTH_MODE", "db")
     monkeypatch.setattr(api, "DB", db.bind)
     monkeypatch.setattr(api, "DEMO", False)
-    token = issue(db, "release-reviewer", {"imports:write"}, 1, "release-reviewer-test-token")
+    monkeypatch.setattr(api, "LIMITER", SimpleNamespace(allow=lambda *args: True))
+    token = issue(db, "release-submitter", {"imports:write", "releases:approve"}, 1, "release-submitter-test-token")
+    reviewer_token = issue(db, "independent-reviewer", {"releases:approve"}, 1, "independent-reviewer-test-token")
     payload = {**manifest().__dict__, "published_at": manifest().published_at.isoformat(), "original_source_base64": base64.b64encode(b"publisher-original").decode(), "extract_csv_base64": base64.b64encode(CSV).decode()}
     client = TestClient(api.app)
     assert client.post("/api/v1/admin/imports/release", json=payload).status_code == 401
     headers = {"X-Admin-Token": token}
+    manual = b"indicator_id,value,unit,period_start,period_end,published_at,vintage_id,source_reference,quality\nusd_inr_spot,81.25,INR_per_USD,2024-01-02,2024-01-02,2024-01-03T12:00:00Z,manual-bypass,https://www.rbi.org.in/reference,verified\n"
+    bypass = client.post("/api/v1/admin/imports/csv", content=manual, headers={**headers, "X-Source-Provider": "rbi", "X-License-Attestation": "public-redistributable", "Content-Type": "text/csv"})
+    assert bypass.status_code == 422
+    review_payload = {**manifest().__dict__, "published_at": manifest().published_at.isoformat(), "extract_sha256": hashlib.sha256(CSV).hexdigest(), "original_archive_reference": "archive://fixture/original", "publication_evidence_note": "Independent fixture release notice dated 3 January 2024.", "entitlement_reference": "archive://fixture/written-permission"}
+    submitted = client.post("/api/v1/admin/releases/reviews", json=review_payload, headers=headers)
+    assert submitted.status_code == 200
+    review_id = submitted.json()["review_id"]
+    payload["review_id"] = review_id
+    assert client.post("/api/v1/admin/imports/release", json=payload, headers=headers).status_code == 422  # pending
+    approval = {"publication_evidence_verified": True, "entitlement_verified": True, "review_note": "Checked the separate fixture notice and permission record."}
+    assert client.post(f"/api/v1/admin/releases/reviews/{review_id}/approve", json=approval, headers=headers).status_code == 409  # no self approval
+    reviewer_headers = {"X-Admin-Token": reviewer_token}
+    reviewed = client.get(f"/api/v1/admin/releases/reviews/{review_id}", headers=reviewer_headers)
+    assert reviewed.json()["source_sha256"] == manifest().source_sha256
+    assert client.post(f"/api/v1/admin/releases/reviews/{review_id}/approve", json=approval, headers=reviewer_headers).status_code == 200
+    assert client.post(f"/api/v1/admin/releases/reviews/{review_id}/approve", json=approval, headers=reviewer_headers).status_code == 409
     bad = {**payload, "source_sha256": "0" * 64}
     assert client.post("/api/v1/admin/imports/release", json=bad, headers=headers).status_code == 422
     assert client.post("/api/v1/admin/imports/release", json=payload, headers=headers).json()["inserted"] == 1
     assert client.post("/api/v1/admin/imports/release", json=payload, headers=headers).json()["duplicate"] == 1
+    stored = db.scalar(select(SourceReleaseReview).where(SourceReleaseReview.id == review_id))
+    assert stored.approved_by == "independent-reviewer"
+    assert stored.publication_evidence_note and stored.entitlement_reference
+    observation = db.scalar(select(Observation).where(Observation.provider == "rbi"))
+    assert observation.release_review_id == review_id and observation.rate_kind == "published_reference_rate"
+    with pytest.raises(ValueError, match="Conflicting reviewed release"):
+        ingest_records(db, parse_release_package(CSV, manifest()), CSV, "rbi", original_raw=b"changed publisher bytes", release_review_id=review_id)
     response = client.get("/api/v1/external-liquidity")
     assert response.status_code == 200
     assert response.json()["classification"] == "INSUFFICIENT_EVIDENCE"
+
+
+def test_live_api_partial_counter_stale_and_point_in_time(db, monkeypatch):
+    """Synthetic test records in a private DB exercise the complete live read path."""
+    from fastapi.testclient import TestClient
+    import apps.api.main as api
+    sync_registry(db)
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.setenv("DEMO_MODE", "false")
+    monkeypatch.setattr(api, "DB", db.bind)
+    monkeypatch.setattr(api, "DEMO", False)
+    client = TestClient(api.app)
+    sessions = recent_sessions(datetime(2026, 10, 30, tzinfo=UTC), "india", 60)
+    published = datetime(2026, 10, 30, 10, tzinfo=UTC)
+
+    def add_series(indicator, provider, unit, dates, values, raw):
+        records = [SourceObservation(indicator, Decimal(str(value)), unit, day, day, published, provider, "https://example.org/unit-test-only", f"synthetic-test-{indicator}-{day}") for day, value in zip(dates, values)]
+        return ingest_records(db, records, raw, provider)
+
+    add_series("usd_inr_spot", "rbi", "INR_per_USD", sessions[-21:], [80 + n * .17 for n in range(21)], b"synthetic-fx-test")
+    current = datetime.now(UTC).isoformat()
+    first = client.get("/api/v1/external-liquidity", params={"as_of": current}).json()
+    assert first["classification"] == "AWAITING_FOREIGN_FLOW_EVIDENCE"
+    assert first["evidence_status"]["foreign_equity_selling"] == "UNKNOWN"
+    fx = next(m for m in first["metrics"] if m["id"] == "usd_inr_spot")
+    assert fx["display_name"] == "USD/INR published RBI reference rate"
+    assert fx["rate_kind"] == "published_reference_rate"
+    assert fx["transform"] == "change_pct_20" and fx["scored_feature"] > 2
+    assert client.get("/api/v1/indicators/usd_inr_spot/series", params={"as_of": current}).json()["items"][-1]["rate_kind"] == "published_reference_rate"
+
+    add_series("fpi_equity_net_inr", "nsdl", "INR_cr", sessions[-20:], [-1000] * 20, b"synthetic-fpi-test")
+    second = client.get("/api/v1/external-liquidity", params={"as_of": datetime.now(UTC).isoformat()}).json()
+    assert second["classification"] == "FINANCING_PRESSURE_AWAITING_LIQUIDITY_EVIDENCE"
+    assert second["evidence_status"]["gross_reserve_decline"] == "UNKNOWN"
+    weekly = [date(2026, 8, 7) + timedelta(weeks=n) for n in range(13)]
+    add_series("fx_gross_reserves_usd", "rbi", "USD_bn", weekly, [500] * 13, b"synthetic-reserve-test")
+    add_series("brent_usd", "licensed_brent", "USD_per_bbl", sessions, [90] * len(sessions), b"synthetic-oil-test")
+    third = client.get("/api/v1/external-liquidity", params={"as_of": datetime.now(UTC).isoformat()}).json()
+    assert third["classification"] == "FINANCING_PRESSURE_WITH_COUNTER_LIQUIDITY_EVIDENCE"
+    assert third["evidence_status"]["gross_reserve_decline"] == "COUNTER"
+    assert third["evidence_status"]["elevated_oil"] == "COUNTER"
+    stale = client.get("/api/v1/external-liquidity", params={"as_of": "2026-11-06T18:30:00+05:30"}).json()
+    assert stale["classification"] == "INSUFFICIENT_EVIDENCE"
+    assert stale["evidence_status"]["depreciation"] == "UNKNOWN"
+    assert next(m for m in stale["metrics"] if m["id"] == "usd_inr_spot")["status"] == "stale"
+    vendor = SourceObservation("usd_inr_spot", Decimal("83.40"), "INR_per_USD", sessions[-1], sessions[-1], published + timedelta(hours=1), "licensed_vendor", "https://example.org/unit-test-only", "synthetic-test-vendor-switch")
+    ingest_records(db, [vendor], b"synthetic-conflicting-rate-definition", "licensed_vendor")
+    switched = client.get("/api/v1/external-liquidity", params={"as_of": datetime.now(UTC).isoformat()}).json()
+    assert switched["classification"] == "INSUFFICIENT_EVIDENCE"
+    assert next(m for m in switched["metrics"] if m["id"] == "usd_inr_spot")["history_status"] == "insufficient_or_gap"
+    past = client.get("/api/v1/replay", params={"as_of": "2026-10-30T18:30:00+05:30", "vintage_mode": "system_known", "ruleset": "v2"}).json()
+    assert next(m for m in past["metrics"] if m["id"] == "usd_inr_spot")["status"] == "DATA_UNAVAILABLE"

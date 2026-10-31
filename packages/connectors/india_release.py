@@ -45,17 +45,15 @@ class ReleaseManifest:
     definition_version: str
 
 
-def parse_release_package(raw: bytes, manifest: ReleaseManifest) -> list[SourceObservation]:
-    """Parse a reviewed extract; hash is of original publisher bytes, not this extract.
-
-    Without a proven release timestamp, a historical extract cannot be imported.
-    A license/permission record is required outside this payload for public display.
-    """
+def validate_manifest(manifest: ReleaseManifest) -> None:
+    """Check shape and host; authenticity and legal rights need human review."""
     if manifest.provider not in INDICATORS:
         raise ValueError("Unknown source provider")
     hosts = PROVIDERS[manifest.provider]
     if not _valid_url(manifest.source_reference, hosts) or not _valid_url(manifest.publication_evidence_url, hosts):
         raise ValueError("Source and publication evidence must be HTTPS URLs on the approved provider host")
+    if manifest.source_reference == manifest.publication_evidence_url:
+        raise ValueError("Publication evidence must be independently identified")
     if manifest.published_at.tzinfo is None or manifest.published_at > datetime.now(timezone.utc):
         raise ValueError("Verified publication timestamp with timezone required")
     if len(manifest.source_sha256) != 64 or any(c not in "0123456789abcdef" for c in manifest.source_sha256):
@@ -64,6 +62,11 @@ def parse_release_package(raw: bytes, manifest: ReleaseManifest) -> list[SourceO
         raise ValueError("Documented redistribution right required")
     if not manifest.definition_version or len(manifest.definition_version) > 80:
         raise ValueError("Indicator definition version required")
+
+
+def parse_release_package(raw: bytes, manifest: ReleaseManifest) -> list[SourceObservation]:
+    """Parse an approved extract; SHA-256 equality proves byte identity only."""
+    validate_manifest(manifest)
     if not raw or len(raw) > 1_000_000:
         raise ValueError("Extract must be nonempty and at most 1 MB")
     try:
