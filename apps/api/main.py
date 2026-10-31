@@ -194,6 +194,8 @@ async def import_csv(request: Request, x_source_provider: str = Header(), x_lice
         raise HTTPException(403, "Live imports are disabled in demo mode")
     if x_license_attestation != "public-redistributable":
         raise HTTPException(422, "Public redistribution attestation required")
+    if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() not in {"text/csv", "application/csv"}:
+        raise HTTPException(415, "CSV content type required")
     if not x_source_provider or len(x_source_provider) > 100:
         raise HTTPException(422, "Invalid source provider")
     raw = await request.body()

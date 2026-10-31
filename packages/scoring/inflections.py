@@ -13,7 +13,7 @@ from .engine_v2 import _core
 def _times(session, rule, as_of, demo, vintage_mode):
     if rule.get("cadence") == "publication":
         rows = observations_at(session, "it_major_usd_revenue_growth", as_of, vintage_mode, demo)
-        return [min(as_of, (r.published_at if vintage_mode == "source_known" else r.ingested_at) + timedelta(minutes=1)) for r in rows[-4:]]
+        return [min(as_of, (r.published_at if vintage_mode == "source_known" else r.ingested_at) + timedelta(minutes=1)) for r in rows[-8:]]
     tz = ZoneInfo("Asia/Kolkata")
     dates = recent_sessions(as_of.astimezone(tz), "india", 15)
     times = [datetime.combine(day, time(23, 59), tz) for day in dates]

@@ -117,8 +117,8 @@ alerts:
     confirm_count: 4
     watch_days: 2
     trigger_days: 3
-    confirm_days: 5
-    recovery_days: 5
+    confirm_days: 4
+    recovery_days: 2
     conditions:
       it_major_usd_revenue_growth: {op: lte, value: 3}
       india_software_services_exports_usd: {op: lte, value: 3}

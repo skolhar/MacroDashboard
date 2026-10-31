@@ -9,6 +9,7 @@ from packages.domain.config import registry
 from packages.domain.models import IngestionRun, Observation, RawSnapshot
 
 POSITIVE_UNITS = {"INR_per_USD", "USD_per_bbl", "index", "index_points", "multiple", "count"}
+OUTLIER_UNITS = POSITIVE_UNITS | {"pct"}
 ACCEPTED_QUALITY = {"verified", "provisional", "revised", "estimated", "source_conflict", "demo"}
 
 
@@ -59,9 +60,9 @@ def ingest_records(session: Session, records: list[SourceObservation], raw: byte
             continue
         prior = session.scalar(select(Observation).where(Observation.indicator_id == record.indicator_id, Observation.period_start == record.period_start, Observation.period_end == record.period_end, Observation.provider == provider).order_by(Observation.published_at.desc()))
         quality = record.quality
-        if record.unit in POSITIVE_UNITS:
+        if record.unit in OUTLIER_UNITS:
             previous_period = session.scalar(select(Observation).where(Observation.indicator_id == record.indicator_id, Observation.period_end < record.period_end, Observation.provider == provider).order_by(Observation.period_end.desc()))
-            if previous_period and previous_period.value > 0 and abs(record.value / previous_period.value - 1) > Decimal("0.5"):
+            if previous_period and previous_period.value > 0 and record.value > 0 and abs(record.value / previous_period.value - 1) > Decimal("0.5"):
                 quality = "source_conflict"
         session.add(Observation(indicator_id=record.indicator_id, period_start=record.period_start, period_end=record.period_end, value=record.value, unit=record.unit, published_at=record.published_at, ingested_at=now, provider=provider, source_url=record.source_reference, vintage_id=record.vintage_id, quality=quality, is_revision=prior is not None, is_demo=record.is_demo, source_identifier=provider, source_reference=record.source_reference, content_hash=digest))
         inserted += 1

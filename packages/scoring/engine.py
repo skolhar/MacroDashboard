@@ -100,9 +100,11 @@ def compute(session, as_of: datetime, demo=True, vintage_mode="system_known"):
         rows = observations_at(session, id, as_of, vintage_mode, demo)
         latest = rows[-1] if rows else None
         valid_freshness = fresh(latest, definition, as_of)
-        value, ids = feature(rows, definition["transform"])
-        status = "unavailable" if latest is None else ("demo" if valid_freshness else "stale")
-        features[id] = value if valid_freshness else None
+        valid_quality = latest is not None and (demo or latest.quality in {"verified", "revised"})
+        score_rows = [r for r in rows if demo or r.quality in {"verified", "revised"}]
+        value, ids = feature(score_rows, definition["transform"])
+        status = "unavailable" if latest is None else (latest.quality if valid_freshness else "stale")
+        features[id] = value if valid_freshness and valid_quality else None
         metrics.append({"id": id, "display_name": definition["display_name"], "cycle": definition["cycle"], "unit": definition["unit"], "frequency": definition["frequency"], "status": status, "value": float(latest.value) if latest else None, "feature": value, "transform": definition["transform"], "observation_ids": ids, "period_start": latest.period_start.isoformat() if latest else None, "period_end": latest.period_end.isoformat() if latest else None, "published_at": latest.published_at.isoformat() if latest else None, "ingested_at": latest.ingested_at.isoformat() if latest else None, "provider": latest.provider if latest else None, "quality": latest.quality if latest else None, "vintage_id": latest.vintage_id if latest else None, "source_url": latest.source_url if latest else None, "provisional_threshold": True})
     cycles = []
     weighted_coverage = 0

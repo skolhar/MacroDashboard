@@ -33,7 +33,8 @@ def _core(session, as_of, demo, vintage_mode):
     for id, definition in definitions.items():
         rows = observations_at(session, id, as_of, vintage_mode, demo)
         latest = rows[-1] if rows else None
-        value, ids = feature(rows, definition["transform"])
+        score_rows = [r for r in rows if demo or r.quality in {"verified", "revised"}]
+        value, ids = feature(score_rows, definition["transform"])
         status = _freshness(latest, definition, as_of, id)
         valid = status in {"verified", "revised", "demo"} and value is not None
         features[id] = value if valid else None

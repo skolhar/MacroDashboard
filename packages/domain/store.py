@@ -20,7 +20,7 @@ def observations_at(session: Session, indicator_id: str, as_of: datetime, mode="
     if demo:
         query = query.where(Observation.quality == "demo")
     else:
-        query = query.where(Observation.quality.in_(("verified", "revised")), Observation.is_demo.is_(False))
+        query = query.where(Observation.quality != "demo", Observation.is_demo.is_(False))
     records = session.scalars(query.order_by(Observation.period_end, Observation.published_at, Observation.ingested_at)).all()
     latest = {}
     for row in records:

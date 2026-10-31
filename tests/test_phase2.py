@@ -6,6 +6,7 @@ from packages.connectors.base import DataUnavailable, SourceObservation, Unavail
 from packages.connectors.manual import parse_manual_csv
 from packages.connectors.treasury import parse_treasury_xml
 from packages.domain.calendar import is_session
+from packages.domain.calendar import sessions_between
 from packages.domain.config import registry, rules
 from packages.domain.models import Observation
 from packages.domain.settings import settings
@@ -13,7 +14,8 @@ from packages.domain.store import observations_at
 from packages.jobs.ingest import ingest_records
 from packages.jobs.sync_registry import sync_registry
 from packages.scoring.engine_v2 import compute_v2
-from packages.scoring.inflections import status_for_evaluations
+from packages.scoring.engine_v2 import _freshness
+from packages.scoring.inflections import status_for_evaluations, persist_transitions
 
 
 def record(value="7.4", quality="verified", vintage="a"):
@@ -64,6 +66,18 @@ def test_ingestion_rejects_conflict_bad_units_and_missing_source(db):
             db.rollback()
 
 
+def test_outlier_remains_visible_but_unscored(db):
+    sync_registry(db)
+    ingest_records(db, [record()], b"normal series", "us_treasury")
+    outlier = replace(record(), value=Decimal("30"), period_start=date(2026, 10, 30), period_end=date(2026, 10, 30), vintage_id="outlier")
+    ingest_records(db, [outlier], b"outlier series", "us_treasury")
+    result = compute_v2(db, datetime.now(timezone.utc), demo=False)
+    metric = next(m for m in result["metrics"] if m["id"] == "us_10y_yield")
+    assert metric["value"] == 30
+    assert metric["status"] == "source_conflict"
+    assert metric["scored_feature"] is None
+
+
 def test_manual_csv_validation_and_unavailable_adapter():
     header = "indicator_id,value,unit,period_start,period_end,published_at,vintage_id,source_reference,quality\n"
     row = "us_10y_yield,7.4,pct,2026-10-29,2026-10-29,2026-10-30T00:00:00Z,v1,https://home.treasury.gov/example,verified\n"
@@ -89,6 +103,19 @@ def test_treasury_parser_uses_conservative_publication_time():
     assert rows[0].published_at == received
 
 
+def test_treasury_timeout_has_no_fabricated_fallback():
+    import httpx
+    from packages.connectors.treasury import TreasuryAdapter
+    class TimedOut:
+        def get(self, url):
+            raise httpx.ReadTimeout("source did not respond")
+    try:
+        TreasuryAdapter(TimedOut()).fetch(datetime.now(timezone.utc))
+        assert False, "timeout must propagate"
+    except httpx.ReadTimeout:
+        pass
+
+
 def test_v2_coverage_and_reproducibility(db):
     sync_registry(db)
     as_of = datetime(2026, 10, 30, 18, tzinfo=timezone.utc)
@@ -99,6 +126,10 @@ def test_v2_coverage_and_reproducibility(db):
     assert first["overall"]["score"] is None
     assert first["overall"]["coverage"] == 0
     assert all(c["score"] is None for c in first["cycles"])
+    demo_first = compute_v2(db, as_of, demo=True)
+    demo_second = compute_v2(db, as_of, demo=True)
+    assert demo_first == demo_second
+    assert next(c for c in demo_first["cycles"] if c["id"] == "earnings")["score"] is not None
 
 
 def test_alert_persistence_and_hysteresis():
@@ -112,10 +143,95 @@ def test_alert_persistence_and_hysteresis():
     assert status_for_evaluations([(4, 3)] * 3 + [(0, 0)], rule)[0] == "TRIGGERED"
 
 
+def test_alert_history_deduplicates_and_records_version(db):
+    now = datetime.now(timezone.utc)
+    alert = {"rule_id": "RUPEE_STRESS", "ruleset_version": "v2", "demo": False, "status": "WATCH", "evidence": [{"indicator_id": "usd_inr_spot", "observed": 2.1}]}
+    assert persist_transitions(db, [alert], now) == 1
+    assert persist_transitions(db, [alert], now) == 0
+
+
 def test_calendar_and_forward_sign_guard():
     assert is_session(date(2026, 10, 20), "india") is False
     assert is_session(date(2026, 2, 1), "india") is True
     assert is_session(date(2026, 11, 26), "us") is False
     assert is_session(date(2027, 1, 4), "india") is None
+    assert sessions_between(date(2026, 10, 19), date(2026, 10, 20), "india") == 0
     assert "rbi_net_forward_usd" not in rules("v2")["cycle_signals"]["fx"]
     assert registry(True)["rbi_net_forward_usd"]["direction_of_stress"] == "contextual"
+
+
+def test_source_known_vs_system_known_and_stale_monthly(db):
+    sync_registry(db)
+    ingest_records(db, [record()], b"source-known test", "us_treasury")
+    historical = datetime(2026, 10, 30, 1, tzinfo=timezone.utc)
+    assert observations_at(db, "us_10y_yield", historical, demo=False) == []
+    assert len(observations_at(db, "us_10y_yield", historical, mode="source_known", demo=False)) == 1
+    monthly = db.scalar(select(Observation).where(Observation.indicator_id == "sip_contribution_inr").order_by(Observation.period_end.desc()))
+    assert _freshness(monthly, registry(True)["sip_contribution_inr"], datetime(2027, 1, 31, tzinfo=timezone.utc), "sip_contribution_inr") == "stale"
+
+
+def test_api_auth_and_live_mode_never_falls_back_to_demo(db, monkeypatch):
+    import apps.api.main as api
+    from fastapi.testclient import TestClient
+    monkeypatch.setattr(api, "DB", db.bind)
+    monkeypatch.setattr(api, "DEMO", False)
+    monkeypatch.setattr(api, "DEFAULT_RULESET", "v2")
+    client = TestClient(api.app)
+    response = client.get("/api/v1/dashboard")
+    assert response.status_code == 200
+    assert response.json()["mode"] == "live"
+    assert response.json()["overall"]["coverage"] == 0
+    assert client.post("/api/v1/admin/imports/csv").status_code == 401
+
+
+def test_authenticated_manual_import_requires_license_attestation(db, monkeypatch):
+    import apps.api.main as api
+    from fastapi.testclient import TestClient
+    from packages.domain.settings import token_digest
+    sync_registry(db)
+    monkeypatch.setattr(api, "DB", db.bind)
+    monkeypatch.setattr(api, "DEMO", False)
+    monkeypatch.setenv("ADMIN_TOKEN_SHA256", token_digest("test-admin-only"))
+    client = TestClient(api.app)
+    csv_data = ("indicator_id,value,unit,period_start,period_end,published_at,vintage_id,source_reference,quality\n"
+                "us_10y_yield,7.4,pct,2026-10-29,2026-10-29,2026-10-30T00:00:00Z,manual-1,https://home.treasury.gov/example,verified\n")
+    headers = {"X-Admin-Token": "test-admin-only", "X-Source-Provider": "manual_review", "Content-Type": "text/csv"}
+    assert client.post("/api/v1/admin/imports/csv", content=csv_data, headers=headers).status_code == 422
+    headers["X-License-Attestation"] = "public-redistributable"
+    response = client.post("/api/v1/admin/imports/csv", content=csv_data, headers=headers)
+    assert response.status_code == 200
+    assert response.json()["inserted"] == 1
+
+
+def test_fresh_migration_schema(tmp_path):
+    from alembic import command
+    from alembic.config import Config
+    from sqlalchemy import create_engine, inspect
+    import os
+    from pathlib import Path
+    cfg = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
+    url = f"sqlite:///{tmp_path / 'migration.db'}"
+    cfg.set_main_option("sqlalchemy.url", url)
+    previous = os.environ.pop("DATABASE_URL", None)
+    try:
+        command.upgrade(cfg, "head")
+    finally:
+        if previous is not None:
+            os.environ["DATABASE_URL"] = previous
+    columns = {c["name"] for c in inspect(create_engine(url)).get_columns("observations")}
+    assert {"is_demo", "source_identifier", "content_hash"} <= columns
+
+
+def test_v2_replay_excludes_future_quarterly_publication(db, monkeypatch):
+    import apps.api.main as api
+    from fastapi.testclient import TestClient
+    sync_registry(db)
+    db.add(Observation(indicator_id="it_major_usd_revenue_growth", period_start=date(2026, 1, 1), period_end=date(2026, 3, 31), value=Decimal("-2"), unit="pct", published_at=datetime(2026, 5, 30, tzinfo=timezone.utc), ingested_at=datetime(2026, 5, 31, tzinfo=timezone.utc), provider="manual_review", source_url="https://example.org/filing", vintage_id="quarterly-late", quality="verified", is_revision=False, is_demo=False))
+    db.commit()
+    monkeypatch.setattr(api, "DB", db.bind)
+    monkeypatch.setattr(api, "DEMO", False)
+    client = TestClient(api.app)
+    response = client.get("/api/v1/replay", params={"as_of": "2026-04-30T23:59:00+05:30", "ruleset": "v2"})
+    assert response.status_code == 200
+    metric = next(m for m in response.json()["metrics"] if m["id"] == "it_major_usd_revenue_growth")
+    assert metric["value"] is None
