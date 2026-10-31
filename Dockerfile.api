@@ -7,4 +7,4 @@ COPY packages packages
 COPY config config
 COPY db db
 COPY alembic.ini .
-CMD ["sh", "-c", "alembic upgrade head && python -m packages.jobs.seed && uvicorn apps.api.main:app --host 0.0.0.0 --port 8000"]
+CMD ["sh", "-c", "alembic upgrade head && python -m packages.jobs.sync_registry && python -m packages.jobs.seed && uvicorn apps.api.main:app --host 0.0.0.0 --port 8000"]

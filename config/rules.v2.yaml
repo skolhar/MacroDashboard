@@ -1,0 +1,126 @@
+version: v2
+calibration: provisional
+cycle_weights: {fx: 25, energy: 20, flows: 20, earnings: 20, it: 10, global: 5}
+cycle_signals:
+  fx:
+    usd_inr_spot: {weight: 40, green: 0, amber: 2, red: 4}
+    fx_gross_reserves_usd: {weight: 25, green: 0, amber: -3, red: -7}
+    fcnr_deposits_usd: {weight: 15, green: 8, amber: 0, red: -8}
+    current_account_pct_gdp: {weight: 20, green: 0, amber: -2, red: -4}
+  energy:
+    brent_usd: {weight: 35, green: 80, amber: 100, red: 120}
+    india_10y_yield: {weight: 30, green: 0, amber: 25, red: 60}
+    india_cpi_yoy: {weight: 25, green: 4, amber: 6, red: 8}
+    india_repo_rate: {weight: 10, green: 5, amber: 7, red: 9}
+  flows:
+    fpi_equity_net_inr: {weight: 40, green: 0, amber: -15000, red: -40000}
+    dii_equity_net_inr: {weight: 20, green: 10000, amber: 0, red: -10000}
+    sip_contribution_inr: {weight: 20, green: 12, amber: 3, red: -5}
+    smallcap_mf_net_inr: {weight: 20, green: 3000, amber: 0, red: -3000}
+  earnings:
+    nifty_eps_revision_3m: {weight: 40, green: 2, amber: 0, red: -5}
+    midcap150_pe: {weight: 15, green: 50, amber: 80, red: 95}
+    smallcap250_pe: {weight: 15, green: 50, amber: 80, red: 95}
+    market_breadth_pct_above_200dma: {weight: 30, green: 70, amber: 40, red: 20}
+  it:
+    india_software_services_exports_usd: {weight: 30, green: 8, amber: 3, red: 0}
+    it_major_usd_revenue_growth: {weight: 40, green: 8, amber: 3, red: 0}
+    it_major_headcount_yoy: {weight: 30, green: 5, amber: 0, red: -5}
+  global:
+    us_10y_yield: {weight: 20, green: 0, amber: 25, red: 60}
+    dxy: {weight: 20, green: 0, amber: 2, red: 4}
+    nasdaq100_price: {weight: 20, green: 5, amber: -5, red: -15}
+    us_high_yield_oas: {weight: 20, green: 300, amber: 500, red: 800}
+    hyperscaler_capex_guidance_growth: {weight: 20, green: 15, amber: 0, red: -10}
+alerts:
+  - id: RUPEE_STRESS
+    label: Rupee and external liquidity stress
+    min_known: 3
+    watch_count: 2
+    trigger_count: 3
+    confirm_count: 4
+    watch_days: 2
+    trigger_days: 3
+    confirm_days: 5
+    recovery_days: 5
+    conditions:
+      usd_inr_spot: {op: gte, value: 2}
+      fpi_equity_net_inr: {op: lte, value: -15000}
+      brent_usd: {op: gte, value: 100}
+      fx_gross_reserves_usd: {op: lte, value: -3}
+  - id: MID_SMALL_LIQUIDITY_REVERSAL
+    label: Mid and small-cap liquidity reversal
+    min_known: 3
+    watch_count: 2
+    trigger_count: 3
+    confirm_count: 4
+    watch_days: 2
+    trigger_days: 3
+    confirm_days: 5
+    recovery_days: 5
+    conditions:
+      smallcap_mf_net_inr: {op: lte, value: 0}
+      smallcap250_pe: {op: gte, value: 80}
+      market_breadth_pct_above_200dma: {op: lte, value: 35}
+      nifty_eps_revision_3m: {op: lte, value: 0}
+  - id: BROAD_EQUITY_DERATING
+    label: Broad equity de-rating
+    min_known: 3
+    watch_count: 2
+    trigger_count: 3
+    confirm_count: 4
+    watch_days: 2
+    trigger_days: 3
+    confirm_days: 5
+    recovery_days: 5
+    conditions:
+      india_10y_yield: {op: gte, value: 25}
+      nifty_eps_revision_3m: {op: lte, value: -3}
+      fpi_equity_net_inr: {op: lte, value: 0}
+      market_breadth_pct_above_200dma: {op: lte, value: 35}
+  - id: OIL_STAGFLATION
+    label: Oil-driven stagflation pressure
+    min_known: 3
+    watch_count: 2
+    trigger_count: 3
+    confirm_count: 4
+    watch_days: 2
+    trigger_days: 3
+    confirm_days: 5
+    recovery_days: 5
+    conditions:
+      brent_usd: {op: gte, value: 100}
+      india_cpi_yoy: {op: gte, value: 6}
+      india_10y_yield: {op: gte, value: 25}
+      current_account_pct_gdp: {op: lte, value: -2.5}
+  - id: AI_CRASH_CONTAGION
+    label: Global AI and credit contagion
+    min_known: 3
+    watch_count: 2
+    trigger_count: 3
+    confirm_count: 4
+    watch_days: 2
+    trigger_days: 3
+    confirm_days: 5
+    recovery_days: 5
+    conditions:
+      nasdaq100_price: {op: lte, value: -5}
+      us_high_yield_oas: {op: gte, value: 500}
+      hyperscaler_capex_guidance_growth: {op: lte, value: 0}
+      dxy: {op: gte, value: 2}
+  - id: INDIA_IT_EXPORT_DISRUPTION
+    label: India IT export disruption
+    cadence: publication
+    min_known: 3
+    watch_count: 2
+    trigger_count: 3
+    confirm_count: 4
+    watch_days: 2
+    trigger_days: 3
+    confirm_days: 5
+    recovery_days: 5
+    conditions:
+      it_major_usd_revenue_growth: {op: lte, value: 3}
+      india_software_services_exports_usd: {op: lte, value: 3}
+      it_major_headcount_yoy: {op: lte, value: 0}
+      it_ai_pricing_pressure: {op: gte, value: 60}
