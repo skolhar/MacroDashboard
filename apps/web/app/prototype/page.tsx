@@ -1,5 +1,7 @@
 'use client';
 
+import './prototype.css';
+
 import { useMemo, useState } from 'react';
 
 type Observation = { day: number; value: number };
