@@ -1,11 +1,14 @@
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
+import time
 import httpx
 import pytest
 import yaml
-from sqlalchemy import select
-from packages.domain.models import AdminAudit, AlertEvaluation, IngestionRun, OperatorCredential
-from packages.domain.security import DatabaseRateLimiter, authorize_token, client_identity
+from sqlalchemy import create_engine, select
+from packages.domain.models import AdminAudit, AlertEvaluation, AlertTransition, IngestionRun, Observation, OperatorCredential, RateLimitCounter
+from packages.domain.security import DatabaseRateLimiter, RateLimitStoreUnavailable, authorize_token, client_identity
 from packages.domain.settings import token_digest
 from packages.jobs.operators import issue, revoke
 from packages.scoring.engine_v2 import data_confidence, history_contiguous
@@ -48,10 +51,13 @@ def test_staging_rejects_legacy_shared_token_and_health_excludes_secrets(db, mon
 
 
 def test_trusted_proxy_does_not_accept_spoofed_headers():
-    cidrs = ("172.30.51.0/24",)
+    cidrs = ("172.30.51.10/32",)
     assert client_identity("203.0.113.5", "192.0.2.10", cidrs) == "203.0.113.5"
-    assert client_identity("172.30.51.7", "192.0.2.10", cidrs) == "192.0.2.10"
-    assert client_identity("172.30.51.7", "not-an-ip", cidrs) == "172.30.51.7"
+    assert client_identity("172.30.51.10", "192.0.2.10", cidrs) == "192.0.2.10"
+    assert client_identity("172.30.51.11", "192.0.2.10", cidrs) == "172.30.51.11"
+    assert client_identity("172.30.51.10", "not-an-ip", cidrs) == "172.30.51.10"
+    assert client_identity("127.0.0.1", "192.0.2.10", cidrs) == "127.0.0.1"
+    assert client_identity("172.30.51.10", "192.0.2.10, 203.0.113.9", cidrs) == "172.30.51.10"
 
 
 def test_database_rate_limit_is_shared_across_instances(db):
@@ -62,12 +68,55 @@ def test_database_rate_limit_is_shared_across_instances(db):
     assert second.allow("different-client", 2)
 
 
+def test_database_rate_limit_concurrency_cleanup_and_fail_closed(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'rate-test.db'}", connect_args={"timeout": 30})
+    RateLimitCounter.__table__.create(engine)
+    limiter = DatabaseRateLimiter(engine)
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        allowed = list(pool.map(lambda _: limiter.allow("concurrent-client", 20), range(60)))
+    assert sum(allowed) == 20
+    assert not limiter.allow("concurrent-client", 20)
+    old = int(time.time()) - 7200
+    with engine.begin() as connection:
+        connection.execute(RateLimitCounter.__table__.insert().values(key="old", window_start=old, count=1))
+    assert limiter.prune(retention_seconds=3600) == 1
+    assert not limiter.allow("concurrent-client", 20)
+    engine.dispose()
+
+    unavailable = DatabaseRateLimiter(create_engine("sqlite://"))
+    with pytest.raises(RateLimitStoreUnavailable):
+        unavailable.allow("test", 1)
+    with pytest.raises(RateLimitStoreUnavailable):
+        unavailable.prune()
+
+
+def test_rate_load_script_cannot_target_production():
+    from scripts.staging_rate_load import run
+    with pytest.raises(ValueError):
+        run("https://smarthedge.in")
+
+
+def test_rate_store_failure_rejects_http_before_handler(monkeypatch):
+    from fastapi.testclient import TestClient
+    import apps.api.main as api
+    class FailedStore:
+        def allow(self, *args):
+            raise RateLimitStoreUnavailable("internal database detail")
+    monkeypatch.setattr(api, "LIMITER", FailedStore())
+    response = TestClient(api.app).get("/api/v1/health")
+    assert response.status_code == 503
+    assert response.json()["error"]["message"] == "Request admission unavailable"
+    assert "internal database detail" not in response.text
+
+
 def test_data_confidence_is_distinct_and_demo_unscored():
     metrics = [{"status": "verified", "scored_feature": 4.0, "provider": "official", "ingested_at": "2026-10-30T00:00:00+00:00"},
                {"status": "stale", "scored_feature": None, "provider": "official", "ingested_at": "2026-09-01T00:00:00+00:00"},
                {"status": "DATA_UNAVAILABLE", "scored_feature": None, "provider": None, "ingested_at": None}]
     score = data_confidence(metrics, 0.25, False)
     assert 0 < score["score"] < 50
+    assert "Operational coverage/quality index" in score["reason"]
+    assert "not statistical certainty" in score["reason"]
     assert score["source_backed_count"] == 1
     assert data_confidence(metrics, 0.25, True)["score"] is None
     assert data_confidence(metrics[1:], 0, False)["score"] == 0
@@ -171,11 +220,63 @@ def test_checkpoint_replay_excludes_future_recorded_events(db, monkeypatch):
     assert evaluate_v2(db, as_of, demo=False)[0]["status"] == "UNKNOWN"
 
 
+def test_multi_year_checkpoint_late_ingestion_and_revision_are_point_in_time(db, monkeypatch):
+    import packages.scoring.inflections as inflections
+    from packages.domain.store import observations_at
+    from packages.jobs.sync_registry import sync_registry
+    sync_registry(db)
+    rule = {"id": "UNIT_FX", "label": "Unit test FX", "min_known": 1, "watch_count": 1, "trigger_count": 1, "confirm_count": 1,
+            "watch_days": 2, "trigger_days": 2, "confirm_days": 2, "recovery_days": 2,
+            "conditions": {"usd_inr_spot": {"op": "gte", "value": 80}}}
+    monkeypatch.setattr(inflections, "rules", lambda version: {"alerts": [rule]})
+    old = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    for n in range(5):
+        db.add(AlertEvaluation(rule_id=rule["id"], ruleset_version="v2", mode="live", event_at=old + timedelta(days=n), recorded_at=old + timedelta(days=n, hours=1), known=1, triggered=1, evidence_json="[]"))
+    t_late = datetime(2026, 10, 28, 12, tzinfo=timezone.utc)
+    t_original = datetime(2026, 10, 30, 12, tzinfo=timezone.utc)
+    t_revision = datetime(2026, 11, 2, 12, tzinfo=timezone.utc)
+    db.add(Observation(indicator_id="usd_inr_spot", period_start=date(2026, 10, 27), period_end=date(2026, 10, 27), value=Decimal("81"), unit="INR_per_USD", published_at=t_late - timedelta(hours=1), ingested_at=t_original, provider="unit_fixture", source_url="https://example.org/late", vintage_id="late-v1", quality="verified", is_revision=False, is_demo=False))
+    db.add(Observation(indicator_id="usd_inr_spot", period_start=date(2026, 10, 30), period_end=date(2026, 10, 30), value=Decimal("82"), unit="INR_per_USD", published_at=t_original - timedelta(hours=1), ingested_at=t_original, provider="unit_fixture", source_url="https://example.org/original", vintage_id="v1", quality="verified", is_revision=False, is_demo=False))
+    db.add(Observation(indicator_id="usd_inr_spot", period_start=date(2026, 10, 30), period_end=date(2026, 10, 30), value=Decimal("79"), unit="INR_per_USD", published_at=t_revision - timedelta(hours=1), ingested_at=t_revision, provider="unit_fixture", source_url="https://example.org/revision", vintage_id="v2", quality="revised", is_revision=True, is_demo=False))
+    db.commit()
+
+    monkeypatch.setattr(inflections, "_times", lambda session, rule, as_of, demo, mode: [t for t in (t_late, t_original, t_revision) if t <= as_of])
+    def metrics(session, instant, demo, mode):
+        rows = observations_at(session, "usd_inr_spot", instant, mode, demo)
+        row = rows[-1] if rows else None
+        return {"metrics": [{"id": "usd_inr_spot", "scored_feature": float(row.value) if row else None,
+                             "published_at": row.published_at.isoformat() if row else None,
+                             "period_end": row.period_end.isoformat() if row else None,
+                             "provider": row.provider if row else None,
+                             "quality": row.quality if row else None,
+                             "status": row.quality if row else "DATA_UNAVAILABLE"}]}
+    monkeypatch.setattr(inflections, "_core", metrics)
+    before = evaluate_v2(db, t_original, demo=False)[0]
+    assert before["status"] == "CONFIRMED"
+    assert before["_evaluations"][0]["known"] == 0  # late arrival was not known on 28 October
+    assert before["evidence"][0]["observed"] == 82
+    assert persist_transitions(db, [before], t_original) == 1
+    original_event = db.get(AlertEvaluation, (rule["id"], "v2", "live", t_original))
+    original_evidence = original_event.evidence_json
+
+    after = evaluate_v2(db, t_revision, demo=False)[0]
+    assert after["status"] == "CONFIRMED"
+    assert after["recovery_count"] == 1
+    assert after["evidence"][0]["observed"] == 79
+    assert persist_transitions(db, [after], t_revision) == 0
+    db.expire_all()
+    assert db.get(AlertEvaluation, (rule["id"], "v2", "live", t_original)).evidence_json == original_evidence
+    assert db.query(AlertTransition).filter(AlertTransition.rule_id == rule["id"]).count() == 1
+    assert evaluate_v2(db, t_original, demo=False)[0]["evidence"][0]["observed"] == 82
+
+
 def test_staging_compose_is_isolated_and_admin_not_public():
     root = Path(__file__).resolve().parents[1]
     compose = yaml.safe_load((root / "docker-compose.staging.yml").read_text())
     assert compose["name"] == "smarthedge-staging"
     assert "staging_pgdata" in compose["volumes"]
+    assert compose["services"]["api"]["environment"]["TRUSTED_PROXY_CIDRS"] == "172.30.51.10/32"
+    assert compose["services"]["caddy"]["networks"]["staging"]["ipv4_address"] == "172.30.51.10"
     assert all(port.startswith("127.0.0.1:") for service in compose["services"].values() for port in service.get("ports", []))
     caddy = (root / "Caddyfile.staging").read_text()
     assert "handle @admin" in caddy and "respond 403" in caddy

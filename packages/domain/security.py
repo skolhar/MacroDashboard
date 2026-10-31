@@ -7,6 +7,7 @@ from collections import defaultdict, deque
 from datetime import datetime, timezone
 from fastapi import Header, HTTPException, Request
 from sqlalchemy import select, text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from .models import OperatorCredential
 from .settings import settings, token_digest
@@ -62,12 +63,27 @@ class DatabaseRateLimiter:
     def allow(self, key: str, limit: int, window_seconds: int = 60) -> bool:
         window = int(time.time() // window_seconds * window_seconds)
         digest = hashlib.sha256(key.encode()).hexdigest()
-        with self.db.begin() as connection:
-            row = connection.execute(text("""INSERT INTO rate_limit_counters (key, window_start, count)
-                VALUES (:key, :window, 1)
-                ON CONFLICT (key, window_start) DO UPDATE SET count = rate_limit_counters.count + 1
-                WHERE rate_limit_counters.count < :limit RETURNING count"""), {"key": digest, "window": window, "limit": limit}).first()
-            return row is not None
+        try:
+            with self.db.begin() as connection:
+                row = connection.execute(text("""INSERT INTO rate_limit_counters (key, window_start, count)
+                    VALUES (:key, :window, 1)
+                    ON CONFLICT (key, window_start) DO UPDATE SET count = rate_limit_counters.count + 1
+                    WHERE rate_limit_counters.count < :limit RETURNING count"""), {"key": digest, "window": window, "limit": limit}).first()
+                return row is not None
+        except SQLAlchemyError as exc:
+            raise RateLimitStoreUnavailable("Shared rate-limit store unavailable") from exc
+
+    def prune(self, now: int | None = None, retention_seconds: int = 3600) -> int:
+        cutoff = (int(time.time()) if now is None else now) - retention_seconds
+        try:
+            with self.db.begin() as connection:
+                return connection.execute(text("DELETE FROM rate_limit_counters WHERE window_start < :cutoff"), {"cutoff": cutoff}).rowcount
+        except SQLAlchemyError as exc:
+            raise RateLimitStoreUnavailable("Shared rate-limit store unavailable") from exc
+
+
+class RateLimitStoreUnavailable(RuntimeError):
+    pass
 
 
 class RateLimiter:

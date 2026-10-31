@@ -2,11 +2,11 @@
 import os
 import time
 from datetime import datetime, timezone
-from sqlalchemy import text
 from sqlalchemy.orm import Session
 from packages.connectors.treasury import TreasuryAdapter
 from packages.domain.models import AdminAudit, IngestionRun
 from packages.domain.settings import settings
+from packages.domain.security import DatabaseRateLimiter
 from packages.domain.store import engine
 from packages.jobs.ingest import ingest_records
 from packages.jobs.sync_registry import sync_registry
@@ -48,8 +48,7 @@ def main():
                 run_once(session)
             except Exception as exc:
                 print(f"Treasury ingestion failed: {type(exc).__name__}", flush=True)
-            session.execute(text("DELETE FROM rate_limit_counters WHERE window_start < :before"), {"before": int(time.time()) - 3600})
-            session.commit()
+        DatabaseRateLimiter(db).prune()
         time.sleep(21600)
 
 

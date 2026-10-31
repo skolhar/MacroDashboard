@@ -12,7 +12,7 @@ from packages.domain.config import registry, rules
 from packages.domain.models import Observation, AlertTransition, IngestionRun, AdminAudit
 from packages.domain.store import engine, observations_at
 from packages.domain.settings import settings
-from packages.domain.security import RateLimiter, DatabaseRateLimiter, require_scope, client_identity
+from packages.domain.security import RateLimiter, DatabaseRateLimiter, RateLimitStoreUnavailable, require_scope, client_identity
 from packages.connectors.manual import parse_manual_csv
 from packages.connectors.treasury import TreasuryAdapter
 from packages.jobs.ingest import ingest_records
@@ -34,7 +34,11 @@ async def request_id(request: Request, call_next):
     peer = request.client.host if request.client else "unknown"
     client = client_identity(peer, request.headers.get("x-smarthedge-client-ip"), settings().trusted_proxy_cidrs)
     key = f"{client}:{'write' if request.method != 'GET' else 'read'}"
-    if not LIMITER.allow(key, 10 if request.method != "GET" else 240):
+    try:
+        allowed = LIMITER.allow(key, 10 if request.method != "GET" else 240)
+    except RateLimitStoreUnavailable:
+        return JSONResponse(status_code=503, content={"error": {"code": 503, "message": "Request admission unavailable"}})
+    if not allowed:
         return JSONResponse(status_code=429, content={"error": {"code": 429, "message": "Rate limit exceeded"}})
     try:
         body_length = int(request.headers.get("content-length", "0") or 0)

@@ -23,7 +23,7 @@ services:
       APP_ENV: staging
       DEMO_MODE: "false"
       OPERATOR_AUTH_MODE: db
-      TRUSTED_PROXY_CIDRS: 172.30.51.0/24
+      TRUSTED_PROXY_CIDRS: 172.30.51.10/32
     depends_on:
       db:
         condition: service_healthy
@@ -57,7 +57,9 @@ services:
       - ./Caddyfile.staging:/etc/caddy/Caddyfile:ro
       - staging_caddy_data:/data
     depends_on: [api, web]
-    networks: [staging]
+    networks:
+      staging:
+        ipv4_address: 172.30.51.10
     restart: unless-stopped
   scheduler:
     build:

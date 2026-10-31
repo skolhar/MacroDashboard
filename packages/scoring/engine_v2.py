@@ -51,7 +51,7 @@ def data_confidence(metrics, weighted_coverage, demo):
     providers = {m["provider"] for m in eligible if m["provider"]}
     score = round(100 * (0.6 * weighted_coverage + 0.25 * len(eligible) / total + 0.15 * min(1, len(providers) / 3))) if total else 0
     ingested = max((m["ingested_at"] for m in eligible if m["ingested_at"]), default=None)
-    return {"score": score, "coverage_percent": round(100 * weighted_coverage, 1), "source_backed_count": len(eligible), "registered_count": total, "provider_count": len(providers), "last_successful_ingestion": ingested, "reason": "Provisional source coverage and freshness index; not market certainty"}
+    return {"score": score, "coverage_percent": round(100 * weighted_coverage, 1), "source_backed_count": len(eligible), "registered_count": total, "provider_count": len(providers), "last_successful_ingestion": ingested, "reason": "Operational coverage/quality index; not statistical certainty or forecast confidence"}
 
 
 def history_contiguous(rows, definition, transform, indicator_id):

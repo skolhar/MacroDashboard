@@ -8,6 +8,7 @@ test('isolated staging shows source coverage without claiming composite risk', a
     await page.goto(staging!);
     await expect(page.getByText('STAGING · SOURCE-BACKED DATA ONLY').first()).toBeVisible();
     await expect(page.getByText('Data confidence')).toBeVisible();
+    await expect(page.getByText('Operational coverage/quality index · not statistical certainty')).toBeVisible();
     await expect(page.getByText('1/42 source-backed')).toBeVisible();
     await expect(page.getByText('Insufficient cycle coverage')).toBeVisible();
     await expect(page.locator('.cycle-history')).toHaveCount(6);
