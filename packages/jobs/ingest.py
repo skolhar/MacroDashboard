@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from packages.connectors.base import SourceObservation
 from packages.domain.config import registry
-from packages.domain.models import IngestionRun, Observation, RawSnapshot
+from packages.domain.models import IngestionRun, Observation, RawSnapshot, RBIReserveComponent
 
 POSITIVE_UNITS = {"INR_per_USD", "USD_per_bbl", "index", "index_points", "multiple", "count"}
 OUTLIER_UNITS = POSITIVE_UNITS | {"pct"}
@@ -37,13 +37,15 @@ def validate_record(record: SourceObservation, demo_mode: bool):
         raise ValueError("Invalid provider or vintage")
 
 
-def ingest_records(session: Session, records: list[SourceObservation], raw: bytes, provider: str, demo_mode=False, original_raw: bytes | None = None, release_review_id: int | None = None) -> dict:
+def ingest_records(session: Session, records: list[SourceObservation], raw: bytes, provider: str, demo_mode=False, original_raw: bytes | None = None, release_review_id: int | None = None, reserve_release=None) -> dict:
     if len(raw) > 5_000_000 or not records:
         raise ValueError("Empty or oversized source snapshot")
     for record in records:
         validate_record(record, demo_mode)
         if record.provider != provider:
             raise ValueError("Provider mismatch")
+    if reserve_release is not None and (len(records) != 1 or provider != "rbi" or records[0].indicator_id != "fx_gross_reserves_usd" or records[0].period_end != reserve_release.reference_week or records[0].value != reserve_release.total_usd_bn or release_review_id is None):
+        raise ValueError("Parsed WSS release does not match reviewed observation")
     digest = hashlib.sha256(original_raw if original_raw is not None else raw).hexdigest()
     now = datetime.now(timezone.utc)
     run = IngestionRun(provider=provider, started_at=now, status="running", item_count=0)
@@ -60,6 +62,8 @@ def ingest_records(session: Session, records: list[SourceObservation], raw: byte
                 raise ValueError("Conflicting duplicate observation")
             if release_review_id is not None and (existing.release_review_id != release_review_id or existing.content_hash != digest or existing.published_at != record.published_at):
                 raise ValueError("Conflicting reviewed release for existing vintage")
+            if reserve_release is not None and not _matching_components(session.get(RBIReserveComponent, existing.id), reserve_release):
+                raise ValueError("Conflicting WSS components for existing vintage")
             continue
         prior = session.scalar(select(Observation).where(Observation.indicator_id == record.indicator_id, Observation.period_start == record.period_start, Observation.period_end == record.period_end, Observation.provider == provider).order_by(Observation.published_at.desc()))
         quality = record.quality
@@ -68,7 +72,11 @@ def ingest_records(session: Session, records: list[SourceObservation], raw: byte
             if previous_period and previous_period.value > 0 and record.value > 0 and abs(record.value / previous_period.value - 1) > Decimal("0.5"):
                 quality = "source_conflict"
         rate_kind = "published_reference_rate" if record.indicator_id == "usd_inr_spot" and provider in {"rbi", "fbil"} else "provider_defined_fx_rate" if record.indicator_id == "usd_inr_spot" else None
-        session.add(Observation(indicator_id=record.indicator_id, period_start=record.period_start, period_end=record.period_end, value=record.value, unit=record.unit, published_at=record.published_at, ingested_at=now, provider=provider, source_url=record.source_reference, vintage_id=record.vintage_id, quality=quality, is_revision=prior is not None, is_demo=record.is_demo, source_identifier=provider, source_reference=record.source_reference, content_hash=digest, release_review_id=release_review_id, rate_kind=rate_kind))
+        observation = Observation(indicator_id=record.indicator_id, period_start=record.period_start, period_end=record.period_end, value=record.value, unit=record.unit, published_at=record.published_at, ingested_at=now, provider=provider, source_url=record.source_reference, vintage_id=record.vintage_id, quality=quality, is_revision=prior is not None, is_demo=record.is_demo, source_identifier=provider, source_reference=record.source_reference, content_hash=digest, release_review_id=release_review_id, rate_kind=rate_kind)
+        session.add(observation)
+        if reserve_release is not None:
+            session.flush()
+            session.add(RBIReserveComponent(observation_id=observation.id, **_component_values(reserve_release)))
         inserted += 1
         revisions += int(prior is not None)
     run.status = "success"
@@ -76,3 +84,11 @@ def ingest_records(session: Session, records: list[SourceObservation], raw: byte
     run.item_count = inserted
     session.commit()
     return {"inserted": inserted, "duplicate": len(records) - inserted, "revisions": revisions, "snapshot_sha256": digest, "run_id": run.id}
+
+
+def _component_values(release):
+    return {name: getattr(release, name) for name in ("total_usd_mn", "foreign_currency_assets_usd_mn", "gold_usd_mn", "sdr_usd_mn", "imf_reserve_tranche_usd_mn")}
+
+
+def _matching_components(stored, release):
+    return stored is not None and all(getattr(stored, key) == value for key, value in _component_values(release).items())

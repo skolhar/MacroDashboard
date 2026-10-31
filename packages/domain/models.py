@@ -65,6 +65,17 @@ class Observation(Base):
     rate_kind: Mapped[str | None] = mapped_column(String(60), nullable=True)
 
 
+class RBIReserveComponent(Base):
+    """Reported first-column USD-million WSS components for one immutable vintage."""
+    __tablename__ = "rbi_reserve_components"
+    observation_id: Mapped[int] = mapped_column(ForeignKey("observations.id"), primary_key=True)
+    total_usd_mn: Mapped[Decimal] = mapped_column(Numeric(24, 3))
+    foreign_currency_assets_usd_mn: Mapped[Decimal] = mapped_column(Numeric(24, 3))
+    gold_usd_mn: Mapped[Decimal] = mapped_column(Numeric(24, 3))
+    sdr_usd_mn: Mapped[Decimal] = mapped_column(Numeric(24, 3))
+    imf_reserve_tranche_usd_mn: Mapped[Decimal] = mapped_column(Numeric(24, 3))
+
+
 class RawSnapshot(Base):
     __tablename__ = "raw_snapshots"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
