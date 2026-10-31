@@ -39,6 +39,36 @@ function Chart({ rows, metric, thresholds }: { rows: Series['items']; metric: Me
   </svg><div className="chart-axis"><span>{data[0].period_end}</span><span>{metric.transform} · {metric.unit}</span><span>{data.at(-1)?.period_end}</span></div></div>;
 }
 
+
+/**
+ * Existing cycle scores measure macro stress, NOT the direction of an asset price.
+ * Until a point-in-time validated instrument mapping exists, report the trend as
+ * unavailable and expose the relevant cycle context without inventing signals.
+ */
+function MarketTrendStrip({ data }: { data: Dashboard }) {
+  const instruments = [
+    { name: 'Nifty 50', context: ['earnings', 'flows', 'global'] },
+    { name: 'MCX Crude Oil', context: ['energy', 'global'] },
+    { name: 'USD/INR', context: ['fx', 'global'] },
+  ];
+  return <section className="panel" aria-label="Instrument trend overview" style={{ marginBottom: '1rem' }}>
+    <div className="panel-heading"><div><div className="eyebrow">MODEL / INSTRUMENT OUTLOOK</div><h2>Nifty · Crude · USD/INR</h2></div><span className="muted">Directional mapping not yet validated</span></div>
+    <div className="cycle-grid">
+      {instruments.map(item => {
+        const cycles = item.context.map(id => data.cycles.find(c => c.id === id)).filter((c): c is Cycle => Boolean(c));
+        const usable = cycles.filter(c => c.score !== null && c.coverage > 0);
+        return <article className="cycle-card" key={item.name}>
+          <h3>{item.name}</h3>
+          <div className="cycle-score">N/A</div>
+          <p className="muted">Trend unavailable · no validated asset-direction model</p>
+          <p className="caption">Macro context: {usable.length ? usable.map(c => `${labels[c.id] || c.id}: ${fmt(c.score)} stress (${Math.round(c.coverage * 100)}% coverage)`).join(' · ') : 'Insufficient source-backed cycle coverage'}</p>
+          <small className="muted">{item.name === 'USD/INR' ? 'Monitoring only · no currency trading signal' : 'No trade direction implied'} · {data.mode === 'demo' ? 'Synthetic demonstration' : 'Source and model gates apply'}</small>
+        </article>;
+      })}
+    </div>
+  </section>;
+}
+
 export default async function Monitor({ searchParams }: { searchParams: Promise<{ as_of?: string; metric?: string; ruleset?: string }> }) {
   const params = await searchParams;
   const query = new URLSearchParams();
@@ -59,6 +89,7 @@ export default async function Monitor({ searchParams }: { searchParams: Promise<
   const demo = data.mode === 'demo';
   return <main className="container">
     <header className="header"><div><div className="eyebrow">SMART HEDGE / INDIA MACRO RESEARCH</div><h1>Inflection Monitor</h1><p className="subtitle">Financial flows · fundamentals · expectations · policy response</p><a href="/external-liquidity">India External Liquidity →</a></div><div className="header-right"><strong className={demo ? 'demo' : 'live-label'}>{demo ? 'DEMO · SYNTHETIC DATA' : data.environment === 'staging' ? 'STAGING · SOURCE-BACKED DATA ONLY' : 'LIVE MODE · VERIFIED INPUTS ONLY'}</strong><span>As of {new Date(data.as_of).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' })} IST</span><span>Ruleset {data.ruleset_version} · provisional thresholds</span></div></header>
+    <MarketTrendStrip data={data}/>
     <form className="filters" action="/" method="get" aria-label="Dashboard filters"><label>As-of timestamp (ISO + timezone) <input type="text" name="as_of" placeholder="2026-10-31T00:00:00+05:30" defaultValue={params.as_of || ''} /></label><label>Ruleset <select name="ruleset" defaultValue={params.ruleset || data.ruleset_version}><option value="v1">v1 Phase 1</option><option value="v2">v2 experimental</option></select></label><label>Indicator <select name="metric" defaultValue={metric.id}>{data.metrics.map(m => <option key={m.id} value={m.id}>{m.display_name}</option>)}</select></label><button type="submit">Apply</button></form>
     <section className="summary" aria-label="Overall risk summary"><div><div className="eyebrow">COMPOSITE REFLEXIVITY RISK</div><div className="score">{fmt(data.overall.score)}<small>{data.overall.score === null ? '' : ' / 100'}</small></div><p>{data.overall.regime === 'insufficient_data' ? 'Insufficient cycle coverage' : data.overall.regime}</p>{data.overall.prior_regime && <small className="muted">Prior regime: {data.overall.prior_regime}</small>}</div><div className="summary-stat"><span>Score coverage</span><strong>{Math.round(data.overall.coverage * 100)}%</strong><small>Configured weights retained</small></div><div className="summary-stat"><span>Data confidence</span><strong>{fmt(data.data_confidence?.score)}{data.data_confidence?.score == null ? '' : ' / 100'}</strong><small>Operational coverage/quality index · not statistical certainty</small><small>{data.data_confidence?.source_backed_count ?? 0}/{data.data_confidence?.registered_count ?? data.metrics.length} source-backed</small></div><div className="summary-stat"><span>Inflection alerts</span><strong>{active.length} active</strong><small>{data.alerts.length} rules evaluated</small></div><div className="summary-note">{data.overall.reason || (demo ? 'Synthetic test inputs are never mixed with live scores.' : 'Risk index only; not a probability or trade signal.')}</div></section>
     <div className="section-heading"><div><div className="eyebrow">SIX MONITORED CYCLES</div><h2>Stress overview</h2></div><span className="muted">Level · momentum · acceleration · coverage</span></div>
