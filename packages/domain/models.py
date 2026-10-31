@@ -61,6 +61,8 @@ class Observation(Base):
     source_identifier: Mapped[str | None] = mapped_column(String(100), nullable=True)
     source_reference: Mapped[str | None] = mapped_column(Text, nullable=True)
     content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    release_review_id: Mapped[int | None] = mapped_column(ForeignKey("source_release_reviews.id"), nullable=True, index=True)
+    rate_kind: Mapped[str | None] = mapped_column(String(60), nullable=True)
 
 
 class RawSnapshot(Base):
@@ -70,6 +72,29 @@ class RawSnapshot(Base):
     content_hash: Mapped[str] = mapped_column(String(64), unique=True)
     received_at: Mapped[datetime] = mapped_column(UTCDateTime)
     source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class SourceReleaseReview(Base):
+    """Durable human review of one original publisher release and normalized extract."""
+    __tablename__ = "source_release_reviews"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    provider: Mapped[str] = mapped_column(String(100))
+    source_reference: Mapped[str] = mapped_column(Text)
+    original_archive_reference: Mapped[str] = mapped_column(Text)
+    source_sha256: Mapped[str] = mapped_column(String(64))
+    extract_sha256: Mapped[str] = mapped_column(String(64))
+    published_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    publication_evidence_url: Mapped[str] = mapped_column(Text)
+    publication_evidence_note: Mapped[str] = mapped_column(Text)
+    entitlement_basis: Mapped[str] = mapped_column(String(40))
+    entitlement_reference: Mapped[str] = mapped_column(Text)
+    definition_version: Mapped[str] = mapped_column(String(80))
+    submitted_by: Mapped[str] = mapped_column(String(100))
+    submitted_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    status: Mapped[str] = mapped_column(String(20))
+    approved_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    review_note: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class ScoreSnapshot(Base):
