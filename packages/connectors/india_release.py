@@ -17,12 +17,14 @@ from .base import SourceObservation
 FIELDS = {"indicator_id", "value", "unit", "period_start", "period_end", "vintage_id", "quality"}
 PROVIDERS = {
     "rbi": ("rbi.org.in", "www.rbi.org.in", "statistics.rbi.org.in", "data.rbi.org.in", "wss.rbi.org.in"),
+    "fbil": ("fbil.org.in", "www.fbil.org.in"),
     "nsdl": ("nsdl.co.in", "fpi.nsdl.co.in", "pilot.fpi.nsdl.co.in"),
     "amfi": ("amfiindia.com", "www.amfiindia.com"),
     "licensed_brent": (),
 }
 INDICATORS = {
     "rbi": {"usd_inr_spot": "INR_per_USD", "fx_gross_reserves_usd": "USD_bn", "india_10y_yield": "pct"},
+    "fbil": {"usd_inr_spot": "INR_per_USD"},
     "nsdl": {"fpi_equity_net_inr": "INR_cr", "fpi_debt_net_inr": "INR_cr"},
     "amfi": {"sip_contribution_inr": "INR_cr", "midcap_mf_net_inr": "INR_cr", "smallcap_mf_net_inr": "INR_cr"},
     "licensed_brent": {"brent_usd": "USD_per_bbl"},
@@ -85,6 +87,25 @@ def parse_release_package(raw: bytes, manifest: ReleaseManifest) -> list[SourceO
             start, end = date.fromisoformat(row["period_start"]), date.fromisoformat(row["period_end"])
             if start > end or end > manifest.published_at.date():
                 raise ValueError("Period must precede documented release")
+            if indicator == "usd_inr_spot" and manifest.provider == "rbi" and end > date(2018, 7, 9):
+                raise ValueError("RBI reference-rate publication ended on 9 July 2018; use licensed FBIL releases")
+            if indicator == "usd_inr_spot" and manifest.provider == "fbil" and end < date(2018, 7, 10):
+                raise ValueError("FBIL reference-rate publication began on 10 July 2018")
+            if indicator == "usd_inr_spot" and not manifest.definition_version.startswith(f"{manifest.provider}-reference-"):
+                raise ValueError("Reference-rate source definition mismatch")
+            if indicator == "india_10y_yield" and not manifest.definition_version.startswith("rbi-daily-10y-benchmark-"):
+                raise ValueError("Monthly end-period yields cannot enter the daily 10Y indicator")
+            if indicator == "fx_gross_reserves_usd" and not manifest.definition_version.startswith("rbi-wss-gross-reserves-"):
+                raise ValueError("Gross reserves require a documented WSS definition")
+            if manifest.provider == "nsdl":
+                confirmed = manifest.definition_version.startswith("nsdl-confirmed-custodian-")
+                provisional = manifest.definition_version.startswith("nsdl-provisional-exchange-")
+                if not (confirmed or provisional):
+                    raise ValueError("NSDL trade basis must distinguish confirmed custodian and provisional exchange data")
+                if (confirmed and row["quality"] == "provisional") or (provisional and row["quality"] != "provisional"):
+                    raise ValueError("NSDL quality must match confirmed or provisional reporting basis")
+                if start != end:
+                    raise ValueError("Monthly cumulative FPI flows cannot enter a daily indicator")
             if row["quality"] not in {"verified", "provisional", "revised"}:
                 raise ValueError("Unsupported quality")
             value = Decimal(row["value"])

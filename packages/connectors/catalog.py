@@ -15,7 +15,8 @@ class SourcePlan:
 
 SOURCE_PLANS = (
     SourcePlan("us_treasury", ("us_10y_yield",), "official_xml", "https://home.treasury.gov/treasury-daily-interest-rate-xml-feed", "Official public feed; actual publication time absent from historical XML"),
-    SourcePlan("rbi", ("usd_inr_spot", "india_10y_yield", "fx_gross_reserves_usd", "rbi_net_forward_usd"), "reviewed_release_only", "https://statistics.rbi.org.in/", "DBIE downloads exist; automated reuse and redistribution rights unconfirmed. Forward-position sign and maturity mapping blocked"),
+    SourcePlan("rbi", ("usd_inr_spot", "india_10y_yield", "fx_gross_reserves_usd", "rbi_net_forward_usd"), "reviewed_release_only", "https://statistics.rbi.org.in/", "RBI reference-rate publication ended 9 July 2018; other DBIE downloads exist, but redistribution rights remain unconfirmed. Forward-position sign and maturity mapping blocked"),
+    SourcePlan("fbil", ("usd_inr_spot",), "licensed_release_only", "https://www.fbil.org.in/", "FBIL publishes USD/INR reference rates from 10 July 2018; a distinct fee-bearing redistribution licence is required"),
     SourcePlan("nsdl", ("fpi_equity_net_inr", "fpi_debt_net_inr"), "reviewed_release_only", "https://pilot.fpi.nsdl.co.in/Reports/Latest.aspx", "Provisional versus confirmed trade basis and redistribution rights require review"),
     SourcePlan("amfi", ("sip_contribution_inr", "smallcap_mf_net_inr", "midcap_mf_net_inr"), "reviewed_release_only", "https://www.amfiindia.com/terms-of-use", "AMFI terms limit reuse to personal non-commercial use absent written agreement"),
     SourcePlan("mospi", ("india_cpi_yoy",), "manual_only", "https://mospi.gov.in/", "Release timing and revision policy require operator review"),

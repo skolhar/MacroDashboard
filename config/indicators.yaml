@@ -1,5 +1,5 @@
 indicators:
-  - {id: usd_inr_spot, display_name: USD/INR spot, cycle: fx, unit: INR_per_USD, frequency: business_daily, direction_of_stress: up, max_age_hours: 48, publication_lag_days: 0, transform: change_pct_20, required_for_score: true, source_priority: [licensed_vendor, rbi]}
+  - {id: usd_inr_spot, display_name: USD/INR source-defined rate, cycle: fx, unit: INR_per_USD, frequency: business_daily, direction_of_stress: up, max_age_hours: 48, publication_lag_days: 0, transform: change_pct_20, required_for_score: true, source_priority: [fbil, licensed_vendor, rbi]}
   - {id: fx_gross_reserves_usd, display_name: FX gross reserves, cycle: fx, unit: USD_bn, frequency: weekly, direction_of_stress: down, max_age_hours: 240, publication_lag_days: 7, transform: change_pct_12, required_for_score: true, source_priority: [rbi]}
   - {id: rbi_net_forward_usd, display_name: RBI net forward position, cycle: fx, unit: USD_bn, frequency: monthly, direction_of_stress: contextual, max_age_hours: 1080, publication_lag_days: 30, transform: none, required_for_score: false, source_priority: [rbi]}
   - {id: brent_usd, display_name: Brent crude, cycle: energy, unit: USD_per_bbl, frequency: business_daily, direction_of_stress: up, max_age_hours: 48, publication_lag_days: 0, transform: rolling_mean_60, required_for_score: true, source_priority: [licensed_vendor]}

@@ -6,7 +6,7 @@ import binascii
 import hashlib
 from uuid import uuid4
 from fastapi import FastAPI, HTTPException, Query, Request, Depends, Header
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -20,6 +20,7 @@ from packages.connectors.manual import parse_manual_csv
 from packages.connectors.india_release import ReleaseManifest, parse_release_package, validate_manifest, INDICATORS
 from packages.connectors.treasury import TreasuryAdapter
 from packages.jobs.ingest import ingest_records
+from packages.jobs.source_archive import MAX_BYTES as SOURCE_ARCHIVE_MAX_BYTES, archive_original, read_original
 from packages.scoring.engine import compute
 from packages.scoring.alerts import fx_alert
 from packages.scoring.engine_v2 import compute_v2
@@ -150,7 +151,7 @@ def indicator_series(indicator_id: str, as_of: str | None = None, from_date: str
     with Session(DB) as session:
         rows = observations_at(session, indicator_id, parsed_as_of(as_of), vintage_mode, DEMO)
         rows = [r for r in rows if (not start or r.period_end >= start) and (not end or r.period_end <= end)]
-        return {"indicator_id": indicator_id, "mode": "demo" if DEMO else "live", "vintage_mode": vintage_mode, "items": [{"id": r.id, "period_start": r.period_start.isoformat(), "period_end": r.period_end.isoformat(), "value": float(r.value), "unit": r.unit, "published_at": r.published_at.isoformat(), "ingested_at": r.ingested_at.isoformat(), "provider": r.provider, "rate_kind": r.rate_kind or ("published_reference_rate" if indicator_id == "usd_inr_spot" and r.provider == "rbi" else None), "source_url": r.source_url, "vintage_id": r.vintage_id, "quality": r.quality, "is_revision": r.is_revision} for r in rows]}
+        return {"indicator_id": indicator_id, "mode": "demo" if DEMO else "live", "vintage_mode": vintage_mode, "items": [{"id": r.id, "period_start": r.period_start.isoformat(), "period_end": r.period_end.isoformat(), "value": float(r.value), "unit": r.unit, "published_at": r.published_at.isoformat(), "ingested_at": r.ingested_at.isoformat(), "provider": r.provider, "rate_kind": r.rate_kind or ("published_reference_rate" if indicator_id == "usd_inr_spot" and r.provider in {"rbi", "fbil"} else None), "source_url": r.source_url, "vintage_id": r.vintage_id, "release_review_id": r.release_review_id, "quality": r.quality, "is_revision": r.is_revision} for r in rows]}
 
 
 @app.get("/api/v1/cycles/{cycle_id}")
@@ -278,6 +279,28 @@ class ReleaseApprovalRequest(BaseModel):
     review_note: str
 
 
+@app.post("/api/v1/admin/releases/archive")
+async def upload_release_original(request: Request, x_source_provider: str = Header(), operator=Depends(require_scope("imports:write"))):
+    if DEMO:
+        raise HTTPException(403, "Live source archive is disabled in demo mode")
+    if x_source_provider not in INDICATORS:
+        raise HTTPException(422, "Unknown source provider")
+    if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/octet-stream":
+        raise HTTPException(415, "Original publisher file content type required")
+    raw = bytearray()
+    async for chunk in request.stream():
+        if len(raw) + len(chunk) > SOURCE_ARCHIVE_MAX_BYTES:
+            raise HTTPException(413, "Original publisher file exceeds archive limit")
+        raw.extend(chunk)
+    try:
+        result = archive_original(bytes(raw))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    with Session(DB) as session:
+        audit_admin(session, operator["operator_id"], "release_archive_upload", "success", f"provider={x_source_provider};sha256={result['sha256']};size={result['size_bytes']}")
+    return result
+
+
 @app.post("/api/v1/admin/releases/reviews")
 def submit_release_review(payload: ReleaseReviewRequest, operator=Depends(require_scope("imports:write"))):
     if DEMO:
@@ -289,10 +312,11 @@ def submit_release_review(payload: ReleaseReviewRequest, operator=Depends(requir
             raise ValueError("Extract SHA-256 required")
         if not 20 <= len(payload.publication_evidence_note) <= 2000:
             raise ValueError("Independent publication evidence note required")
-        if not (payload.original_archive_reference.startswith(("https://", "archive://")) and payload.entitlement_reference.startswith(("https://", "archive://"))):
+        if not payload.entitlement_reference.startswith(("https://", "archive://")):
             raise ValueError("Original archive and entitlement references required")
         if max(len(payload.original_archive_reference), len(payload.entitlement_reference)) > 1000:
             raise ValueError("Review reference too long")
+        read_original(payload.original_archive_reference, payload.source_sha256)
     except ValueError as exc:
         raise HTTPException(422, str(exc))
     with Session(DB) as session:
@@ -313,6 +337,20 @@ def get_release_review(review_id: int, operator=Depends(require_scope("releases:
         return {key: getattr(item, key).isoformat() if isinstance(getattr(item, key), datetime) else getattr(item, key) for key in ("id", "provider", "source_reference", "original_archive_reference", "source_sha256", "extract_sha256", "published_at", "publication_evidence_url", "publication_evidence_note", "entitlement_basis", "entitlement_reference", "definition_version", "submitted_by", "submitted_at", "status", "approved_by", "approved_at", "review_note")}
 
 
+@app.get("/api/v1/admin/releases/reviews/{review_id}/original")
+def download_release_original(review_id: int, operator=Depends(require_scope("releases:approve"))):
+    with Session(DB) as session:
+        item = session.get(SourceReleaseReview, review_id)
+        if item is None:
+            raise HTTPException(404, "Release review not found")
+        try:
+            raw = read_original(item.original_archive_reference, item.source_sha256)
+        except ValueError:
+            raise HTTPException(409, "Archived original unavailable or failed integrity check")
+        audit_admin(session, operator["operator_id"], "release_archive_read", "success", f"review_id={review_id}")
+        return Response(content=raw, media_type="application/octet-stream", headers={"Cache-Control": "no-store", "Content-Disposition": "attachment; filename=source-release.bin"})
+
+
 @app.post("/api/v1/admin/releases/reviews/{review_id}/approve")
 def approve_release_review(review_id: int, payload: ReleaseApprovalRequest, operator=Depends(require_scope("releases:approve"))):
     if DEMO:
@@ -325,6 +363,10 @@ def approve_release_review(review_id: int, payload: ReleaseApprovalRequest, oper
             raise HTTPException(404, "Release review not found")
         if item.status != "pending" or item.submitted_by == operator["operator_id"]:
             raise HTTPException(409, "Independent pending review required")
+        try:
+            read_original(item.original_archive_reference, item.source_sha256)
+        except ValueError:
+            raise HTTPException(409, "Archived original unavailable or failed integrity check")
         item.status = "approved"
         item.approved_by = operator["operator_id"]
         item.approved_at = datetime.now(timezone.utc)
@@ -350,6 +392,8 @@ def import_release(payload: ReleasePackageRequest, operator=Depends(require_scop
             review = session.get(SourceReleaseReview, payload.review_id)
             if review is None or review.status != "approved":
                 raise ValueError("Approved release review required")
+            if read_original(review.original_archive_reference, review.source_sha256) != original:
+                raise ValueError("Original package differs from controlled source archive")
             if (review.provider, review.source_reference, review.publication_evidence_url, review.published_at, review.source_sha256, review.extract_sha256, review.entitlement_basis, review.definition_version) != (payload.provider, payload.source_reference, payload.publication_evidence_url, payload.published_at, payload.source_sha256, hashlib.sha256(extract).hexdigest(), payload.redistribution_basis, payload.definition_version):
                 raise ValueError("Package does not match approved release review")
             outcome = ingest_records(session, records, extract, payload.provider, original_raw=original, release_review_id=review.id)

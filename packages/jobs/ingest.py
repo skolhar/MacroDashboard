@@ -67,7 +67,7 @@ def ingest_records(session: Session, records: list[SourceObservation], raw: byte
             previous_period = session.scalar(select(Observation).where(Observation.indicator_id == record.indicator_id, Observation.period_end < record.period_end, Observation.provider == provider).order_by(Observation.period_end.desc()))
             if previous_period and previous_period.value > 0 and record.value > 0 and abs(record.value / previous_period.value - 1) > Decimal("0.5"):
                 quality = "source_conflict"
-        rate_kind = "published_reference_rate" if record.indicator_id == "usd_inr_spot" and provider == "rbi" else "provider_defined_fx_rate" if record.indicator_id == "usd_inr_spot" else None
+        rate_kind = "published_reference_rate" if record.indicator_id == "usd_inr_spot" and provider in {"rbi", "fbil"} else "provider_defined_fx_rate" if record.indicator_id == "usd_inr_spot" else None
         session.add(Observation(indicator_id=record.indicator_id, period_start=record.period_start, period_end=record.period_end, value=record.value, unit=record.unit, published_at=record.published_at, ingested_at=now, provider=provider, source_url=record.source_reference, vintage_id=record.vintage_id, quality=quality, is_revision=prior is not None, is_demo=record.is_demo, source_identifier=provider, source_reference=record.source_reference, content_hash=digest, release_review_id=release_review_id, rate_kind=rate_kind))
         inserted += 1
         revisions += int(prior is not None)

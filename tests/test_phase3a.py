@@ -19,18 +19,18 @@ from packages.jobs.sync_registry import sync_registry
 from packages.scoring.external_liquidity import external_liquidity_view
 
 UTC = timezone.utc
-CSV = b"indicator_id,value,unit,period_start,period_end,vintage_id,quality\nusd_inr_spot,81.25,INR_per_USD,2024-01-02,2024-01-02,release-1,verified\n"
+CSV = b"indicator_id,value,unit,period_start,period_end,vintage_id,quality\nusd_inr_spot,81.25,INR_per_USD,2018-07-06,2018-07-06,release-1,verified\n"
 
 
 def manifest(**overrides):
-    values = dict(provider="rbi", source_reference="https://www.rbi.org.in/reference", publication_evidence_url="https://www.rbi.org.in/release", published_at=datetime(2024, 1, 3, 12, tzinfo=UTC), source_sha256=hashlib.sha256(b"publisher-original").hexdigest(), redistribution_basis="written-permission", definition_version="rbi-reference-v1")
+    values = dict(provider="rbi", source_reference="https://www.rbi.org.in/reference", publication_evidence_url="https://www.rbi.org.in/release", published_at=datetime(2018, 7, 9, 12, tzinfo=UTC), source_sha256=hashlib.sha256(b"publisher-original").hexdigest(), redistribution_basis="written-permission", definition_version="rbi-reference-v1")
     values.update(overrides)
     return ReleaseManifest(**values)
 
 
 def test_release_package_requires_rights_time_evidence_and_approved_units():
     rows = parse_release_package(CSV, manifest())
-    assert rows[0].published_at == datetime(2024, 1, 3, 12, tzinfo=UTC)
+    assert rows[0].published_at == datetime(2018, 7, 9, 12, tzinfo=UTC)
     assert rows[0].provider == "rbi" and rows[0].unit == "INR_per_USD"
     for bad in (manifest(redistribution_basis="publicly-viewable"), manifest(published_at=datetime(2024, 1, 3, 12)), manifest(publication_evidence_url="https://evil.example/release"), manifest(provider="nsdl")):
         with pytest.raises(ValueError):
@@ -38,7 +38,7 @@ def test_release_package_requires_rights_time_evidence_and_approved_units():
     with pytest.raises(ValueError):
         parse_release_package(CSV.replace(b"INR_per_USD", b"USD_per_INR"), manifest())
     with pytest.raises(ValueError):
-        parse_release_package(CSV.replace(b"2024-01-02,2024-01-02", b"2024-01-04,2024-01-04"), manifest())
+        parse_release_package(CSV.replace(b"2018-07-06,2018-07-06", b"2018-07-10,2018-07-10"), manifest())
     with pytest.raises(ValueError):
         parse_release_package(CSV.replace(b"usd_inr_spot", b"rbi_net_forward_usd"), manifest())
 
@@ -79,12 +79,13 @@ def test_fx_classification_requires_independent_confirmations():
     assert external_liquidity_view(_dashboard(fx=1, fpi=-20000, reserves=-4))["classification"] == "NO_CONFIRMED_FX_PRESSURE"
 
 
-def test_release_api_requires_scoped_operator_and_original_hash(db, monkeypatch):
+def test_release_api_requires_scoped_operator_and_original_hash(db, monkeypatch, tmp_path):
     from fastapi.testclient import TestClient
     import apps.api.main as api
     monkeypatch.setenv("APP_ENV", "development")
     monkeypatch.setenv("DEMO_MODE", "false")
     monkeypatch.setenv("OPERATOR_AUTH_MODE", "db")
+    monkeypatch.setenv("SOURCE_ARCHIVE_ROOT", str(tmp_path / "originals"))
     monkeypatch.setattr(api, "DB", db.bind)
     monkeypatch.setattr(api, "DEMO", False)
     monkeypatch.setattr(api, "LIMITER", SimpleNamespace(allow=lambda *args: True))
@@ -93,11 +94,16 @@ def test_release_api_requires_scoped_operator_and_original_hash(db, monkeypatch)
     payload = {**manifest().__dict__, "published_at": manifest().published_at.isoformat(), "original_source_base64": base64.b64encode(b"publisher-original").decode(), "extract_csv_base64": base64.b64encode(CSV).decode()}
     client = TestClient(api.app)
     assert client.post("/api/v1/admin/imports/release", json=payload).status_code == 401
+    assert client.post("/api/v1/admin/releases/archive", content=b"publisher-original", headers={"X-Source-Provider": "rbi", "Content-Type": "application/octet-stream"}).status_code == 401
     headers = {"X-Admin-Token": token}
-    manual = b"indicator_id,value,unit,period_start,period_end,published_at,vintage_id,source_reference,quality\nusd_inr_spot,81.25,INR_per_USD,2024-01-02,2024-01-02,2024-01-03T12:00:00Z,manual-bypass,https://www.rbi.org.in/reference,verified\n"
+    assert client.post("/api/v1/admin/releases/archive", content=b"x" * 750_001, headers={**headers, "X-Source-Provider": "rbi", "Content-Type": "application/octet-stream"}).status_code == 413
+    archived = client.post("/api/v1/admin/releases/archive", content=b"publisher-original", headers={**headers, "X-Source-Provider": "rbi", "Content-Type": "application/octet-stream"})
+    assert archived.status_code == 200
+    assert archived.json()["sha256"] == manifest().source_sha256
+    manual = b"indicator_id,value,unit,period_start,period_end,published_at,vintage_id,source_reference,quality\nusd_inr_spot,81.25,INR_per_USD,2018-07-06,2018-07-06,2018-07-09T12:00:00Z,manual-bypass,https://www.rbi.org.in/reference,verified\n"
     bypass = client.post("/api/v1/admin/imports/csv", content=manual, headers={**headers, "X-Source-Provider": "rbi", "X-License-Attestation": "public-redistributable", "Content-Type": "text/csv"})
     assert bypass.status_code == 422
-    review_payload = {**manifest().__dict__, "published_at": manifest().published_at.isoformat(), "extract_sha256": hashlib.sha256(CSV).hexdigest(), "original_archive_reference": "archive://fixture/original", "publication_evidence_note": "Independent fixture release notice dated 3 January 2024.", "entitlement_reference": "archive://fixture/written-permission"}
+    review_payload = {**manifest().__dict__, "published_at": manifest().published_at.isoformat(), "extract_sha256": hashlib.sha256(CSV).hexdigest(), "original_archive_reference": archived.json()["reference"], "publication_evidence_note": "Independent fixture release notice dated 9 July 2018.", "entitlement_reference": "archive://fixture/written-permission"}
     submitted = client.post("/api/v1/admin/releases/reviews", json=review_payload, headers=headers)
     assert submitted.status_code == 200
     review_id = submitted.json()["review_id"]
@@ -106,8 +112,10 @@ def test_release_api_requires_scoped_operator_and_original_hash(db, monkeypatch)
     approval = {"publication_evidence_verified": True, "entitlement_verified": True, "review_note": "Checked the separate fixture notice and permission record."}
     assert client.post(f"/api/v1/admin/releases/reviews/{review_id}/approve", json=approval, headers=headers).status_code == 409  # no self approval
     reviewer_headers = {"X-Admin-Token": reviewer_token}
+    assert client.post("/api/v1/admin/releases/archive", content=b"publisher-original", headers={**reviewer_headers, "X-Source-Provider": "rbi", "Content-Type": "application/octet-stream"}).status_code == 403
     reviewed = client.get(f"/api/v1/admin/releases/reviews/{review_id}", headers=reviewer_headers)
     assert reviewed.json()["source_sha256"] == manifest().source_sha256
+    assert client.get(f"/api/v1/admin/releases/reviews/{review_id}/original", headers=reviewer_headers).content == b"publisher-original"
     assert client.post(f"/api/v1/admin/releases/reviews/{review_id}/approve", json=approval, headers=reviewer_headers).status_code == 200
     assert client.post(f"/api/v1/admin/releases/reviews/{review_id}/approve", json=approval, headers=reviewer_headers).status_code == 409
     bad = {**payload, "source_sha256": "0" * 64}
@@ -143,13 +151,13 @@ def test_live_api_partial_counter_stale_and_point_in_time(db, monkeypatch):
         records = [SourceObservation(indicator, Decimal(str(value)), unit, day, day, published, provider, "https://example.org/unit-test-only", f"synthetic-test-{indicator}-{day}") for day, value in zip(dates, values)]
         return ingest_records(db, records, raw, provider)
 
-    add_series("usd_inr_spot", "rbi", "INR_per_USD", sessions[-21:], [80 + n * .17 for n in range(21)], b"synthetic-fx-test")
+    add_series("usd_inr_spot", "fbil", "INR_per_USD", sessions[-21:], [80 + n * .17 for n in range(21)], b"synthetic-fx-test")
     current = datetime.now(UTC).isoformat()
     first = client.get("/api/v1/external-liquidity", params={"as_of": current}).json()
     assert first["classification"] == "AWAITING_FOREIGN_FLOW_EVIDENCE"
     assert first["evidence_status"]["foreign_equity_selling"] == "UNKNOWN"
     fx = next(m for m in first["metrics"] if m["id"] == "usd_inr_spot")
-    assert fx["display_name"] == "USD/INR published RBI reference rate"
+    assert fx["display_name"] == "USD/INR published FBIL reference rate"
     assert fx["rate_kind"] == "published_reference_rate"
     assert fx["transform"] == "change_pct_20" and fx["scored_feature"] > 2
     assert client.get("/api/v1/indicators/usd_inr_spot/series", params={"as_of": current}).json()["items"][-1]["rate_kind"] == "published_reference_rate"

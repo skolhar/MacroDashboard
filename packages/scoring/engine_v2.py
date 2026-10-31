@@ -61,7 +61,9 @@ def history_contiguous(rows, definition, transform, indicator_id):
     needed = 15 if transform == "yoy_3m" else 252 if transform == "percentile_252" else int(transform.rsplit("_", 1)[1]) + (1 if transform.startswith("change_") else 0)
     if len(rows) < needed:
         return False
-    if indicator_id == "usd_inr_spot" and len({(r.provider, r.rate_kind or ("published_reference_rate" if r.provider == "rbi" else "provider_defined_fx_rate")) for r in rows[-needed:]}) != 1:
+    if indicator_id == "usd_inr_spot" and len({(r.provider, r.rate_kind or ("published_reference_rate" if r.provider in {"rbi", "fbil"} else "provider_defined_fx_rate")) for r in rows[-needed:]}) != 1:
+        return False
+    if indicator_id in {"fpi_equity_net_inr", "fpi_debt_net_inr"} and len({(r.provider, r.vintage_id.split(":", 1)[0] if ":" in r.vintage_id else "unversioned") for r in rows[-needed:]}) != 1:
         return False
     frequency = definition["frequency"]
     for previous, current in zip(rows[-needed:-1], rows[-needed + 1:]):
@@ -94,9 +96,9 @@ def _core(session, as_of, demo, vintage_mode):
         status = _freshness(latest, definition, as_of, id)
         valid = status in {"verified", "revised", "demo"} and value is not None
         features[id] = value if valid else None
-        rate_kind = (latest.rate_kind or ("published_reference_rate" if latest.provider == "rbi" else "provider_defined_fx_rate")) if latest and id == "usd_inr_spot" else None
-        display_name = "USD/INR published RBI reference rate" if rate_kind == "published_reference_rate" else "USD/INR provider-defined rate" if id == "usd_inr_spot" else definition["display_name"]
-        metrics.append({"id": id, "display_name": display_name, "rate_kind": rate_kind, "cycle": definition["cycle"], "unit": definition["unit"], "frequency": definition["frequency"], "status": status, "history_status": "contiguous" if contiguous else "insufficient_or_gap", "value": float(latest.value) if latest else None, "feature": value, "scored_feature": features[id], "transform": definition["transform"], "observation_ids": ids, "period_start": latest.period_start.isoformat() if latest else None, "period_end": latest.period_end.isoformat() if latest else None, "published_at": latest.published_at.isoformat() if latest else None, "ingested_at": latest.ingested_at.isoformat() if latest else None, "provider": latest.provider if latest else None, "quality": latest.quality if latest else None, "vintage_id": latest.vintage_id if latest else None, "source_url": latest.source_reference or latest.source_url if latest else None, "provisional_threshold": True})
+        rate_kind = (latest.rate_kind or ("published_reference_rate" if latest.provider in {"rbi", "fbil"} else "provider_defined_fx_rate")) if latest and id == "usd_inr_spot" else None
+        display_name = f"USD/INR published {latest.provider.upper()} reference rate" if rate_kind == "published_reference_rate" else "USD/INR provider-defined rate" if id == "usd_inr_spot" else definition["display_name"]
+        metrics.append({"id": id, "display_name": display_name, "rate_kind": rate_kind, "cycle": definition["cycle"], "unit": definition["unit"], "frequency": definition["frequency"], "status": status, "history_status": "contiguous" if contiguous else "insufficient_or_gap", "value": float(latest.value) if latest else None, "feature": value, "scored_feature": features[id], "transform": definition["transform"], "observation_ids": ids, "period_start": latest.period_start.isoformat() if latest else None, "period_end": latest.period_end.isoformat() if latest else None, "published_at": latest.published_at.isoformat() if latest else None, "ingested_at": latest.ingested_at.isoformat() if latest else None, "provider": latest.provider if latest else None, "quality": latest.quality if latest else None, "vintage_id": latest.vintage_id if latest else None, "release_review_id": latest.release_review_id if latest else None, "source_url": latest.source_reference or latest.source_url if latest else None, "provisional_threshold": True})
     cycles = []
     weighted_coverage = 0
     for cycle_id, cycle_weight in cfg["cycle_weights"].items():
