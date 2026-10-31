@@ -277,6 +277,7 @@ def test_staging_compose_is_isolated_and_admin_not_public():
     assert "staging_pgdata" in compose["volumes"]
     assert compose["services"]["api"]["environment"]["TRUSTED_PROXY_CIDRS"] == "172.30.51.10/32"
     assert compose["services"]["caddy"]["networks"]["staging"]["ipv4_address"] == "172.30.51.10"
+    assert "http://web:3000/" in compose["services"]["web"]["healthcheck"]["test"][-1]
     assert all(port.startswith("127.0.0.1:") for service in compose["services"].values() for port in service.get("ports", []))
     caddy = (root / "Caddyfile.staging").read_text()
     assert "handle @admin" in caddy and "respond 403" in caddy
