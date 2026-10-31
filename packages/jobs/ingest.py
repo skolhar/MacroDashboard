@@ -37,14 +37,14 @@ def validate_record(record: SourceObservation, demo_mode: bool):
         raise ValueError("Invalid provider or vintage")
 
 
-def ingest_records(session: Session, records: list[SourceObservation], raw: bytes, provider: str, demo_mode=False) -> dict:
+def ingest_records(session: Session, records: list[SourceObservation], raw: bytes, provider: str, demo_mode=False, original_raw: bytes | None = None) -> dict:
     if len(raw) > 5_000_000 or not records:
         raise ValueError("Empty or oversized source snapshot")
     for record in records:
         validate_record(record, demo_mode)
         if record.provider != provider:
             raise ValueError("Provider mismatch")
-    digest = hashlib.sha256(raw).hexdigest()
+    digest = hashlib.sha256(original_raw if original_raw is not None else raw).hexdigest()
     now = datetime.now(timezone.utc)
     run = IngestionRun(provider=provider, started_at=now, status="running", item_count=0)
     session.add(run)

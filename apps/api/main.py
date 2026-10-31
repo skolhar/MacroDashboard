@@ -1,6 +1,9 @@
 from datetime import datetime, timezone
 import json
 import os
+import base64
+import binascii
+import hashlib
 from uuid import uuid4
 from fastapi import FastAPI, HTTPException, Query, Request, Depends, Header
 from fastapi.responses import JSONResponse
@@ -14,12 +17,14 @@ from packages.domain.store import engine, observations_at
 from packages.domain.settings import settings
 from packages.domain.security import RateLimiter, DatabaseRateLimiter, RateLimitStoreUnavailable, require_scope, client_identity
 from packages.connectors.manual import parse_manual_csv
+from packages.connectors.india_release import ReleaseManifest, parse_release_package
 from packages.connectors.treasury import TreasuryAdapter
 from packages.jobs.ingest import ingest_records
 from packages.scoring.engine import compute
 from packages.scoring.alerts import fx_alert
 from packages.scoring.engine_v2 import compute_v2
 from packages.scoring.inflections import evaluate_v2, persist_transitions
+from packages.scoring.external_liquidity import external_liquidity_view
 
 app = FastAPI(title="India Macro Reflexivity Dashboard", version="0.2.0")
 DB = engine()
@@ -114,6 +119,11 @@ def sources_health(as_of: str | None = None):
 @app.get("/api/v1/dashboard")
 def get_dashboard(as_of: str | None = None, ruleset: str | None = None):
     return dashboard(as_of, ruleset)
+
+
+@app.get("/api/v1/external-liquidity")
+def external_liquidity(as_of: str | None = None):
+    return external_liquidity_view(dashboard(as_of, "v2"))
 
 
 @app.get("/api/v1/indicators")
@@ -231,6 +241,43 @@ async def import_csv(request: Request, x_source_provider: str = Header(), x_lice
 
 class IngestionRequest(BaseModel):
     adapter: str
+
+
+class ReleasePackageRequest(BaseModel):
+    provider: str
+    source_reference: str
+    publication_evidence_url: str
+    published_at: datetime
+    source_sha256: str
+    redistribution_basis: str
+    definition_version: str
+    original_source_base64: str
+    extract_csv_base64: str
+
+
+@app.post("/api/v1/admin/imports/release")
+def import_release(payload: ReleasePackageRequest, operator=Depends(require_scope("imports:write"))):
+    if DEMO:
+        raise HTTPException(403, "Live imports are disabled in demo mode")
+    try:
+        original = base64.b64decode(payload.original_source_base64, validate=True)
+        extract = base64.b64decode(payload.extract_csv_base64, validate=True)
+        if not original or len(original) > 750_000 or len(extract) > 750_000:
+            raise ValueError("Source and extract must be nonempty and at most 750 KB each")
+        if hashlib.sha256(original).hexdigest() != payload.source_sha256:
+            raise ValueError("Original source hash mismatch")
+        manifest = ReleaseManifest(**payload.model_dump(exclude={"original_source_base64", "extract_csv_base64"}))
+        records = parse_release_package(extract, manifest)
+        with Session(DB) as session:
+            outcome = ingest_records(session, records, extract, payload.provider, original_raw=original)
+            if outcome["inserted"]:
+                persist_transitions(session, evaluate_v2(session, datetime.now(timezone.utc)), datetime.now(timezone.utc))
+            audit_admin(session, operator["operator_id"], "release_import", "success", f"provider={payload.provider};run_id={outcome['run_id']};inserted={outcome['inserted']};source_sha256={outcome['snapshot_sha256']};definition={payload.definition_version};publication_evidence={payload.publication_evidence_url};rights={payload.redistribution_basis}")
+            return outcome
+    except (ValueError, binascii.Error) as exc:
+        with Session(DB) as session:
+            audit_admin(session, operator["operator_id"], "release_import", "rejected", type(exc).__name__)
+        raise HTTPException(422, str(exc))
 
 
 @app.post("/api/v1/admin/ingestion/run")
