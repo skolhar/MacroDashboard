@@ -131,3 +131,43 @@ class AlertTransition(Base):
     evaluated_at: Mapped[datetime] = mapped_column(UTCDateTime)
     evidence_json: Mapped[str] = mapped_column(Text)
     deduplication_key: Mapped[str] = mapped_column(String(200), unique=True)
+
+
+class OperatorCredential(Base):
+    __tablename__ = "operator_credentials"
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    operator_id: Mapped[str] = mapped_column(String(100), index=True)
+    scopes: Mapped[str] = mapped_column(String(200))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    revoked_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+
+class AdminAudit(Base):
+    __tablename__ = "admin_audit"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    operator_id: Mapped[str] = mapped_column(String(100), index=True)
+    action: Mapped[str] = mapped_column(String(80))
+    result: Mapped[str] = mapped_column(String(30))
+    at: Mapped[datetime] = mapped_column(UTCDateTime)
+    details: Mapped[str] = mapped_column(Text)
+
+
+class RateLimitCounter(Base):
+    __tablename__ = "rate_limit_counters"
+    key: Mapped[str] = mapped_column(String(160), primary_key=True)
+    window_start: Mapped[int] = mapped_column(Integer, primary_key=True)
+    count: Mapped[int] = mapped_column(Integer)
+
+
+class AlertEvaluation(Base):
+    """Immutable point-in-time alert input, keyed by session or release event."""
+    __tablename__ = "alert_evaluations"
+    rule_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    ruleset_version: Mapped[str] = mapped_column(String(40), primary_key=True)
+    mode: Mapped[str] = mapped_column(String(20), primary_key=True)
+    event_at: Mapped[datetime] = mapped_column(UTCDateTime, primary_key=True)
+    recorded_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    known: Mapped[int] = mapped_column(Integer)
+    triggered: Mapped[int] = mapped_column(Integer)
+    evidence_json: Mapped[str] = mapped_column(Text)

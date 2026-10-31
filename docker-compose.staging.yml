@@ -1,0 +1,86 @@
+name: smarthedge-staging
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: staging_macro
+      POSTGRES_USER: staging_macro
+      POSTGRES_PASSWORD: ${STAGING_POSTGRES_PASSWORD:?Set a unique staging database password}
+    volumes:
+      - staging_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U staging_macro -d staging_macro"]
+      interval: 3s
+      retries: 20
+    networks: [staging]
+    restart: unless-stopped
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    environment:
+      DATABASE_URL: ${STAGING_DATABASE_URL:?Set the staging-only database URL}
+      APP_ENV: staging
+      DEMO_MODE: "false"
+      OPERATOR_AUTH_MODE: db
+      TRUSTED_PROXY_CIDRS: 172.30.51.0/24
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:18000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=5)"]
+      interval: 30s
+      timeout: 8s
+      retries: 3
+    networks: [staging]
+    restart: unless-stopped
+  web:
+    build: ./apps/web
+    environment:
+      API_INTERNAL_URL: http://api:8000
+      API_DOCS_URL: http://localhost:18000/docs
+    depends_on: [api]
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3000/', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 30s
+      timeout: 12s
+      retries: 3
+    networks: [staging]
+    restart: unless-stopped
+  caddy:
+    image: caddy:2
+    ports:
+      - "127.0.0.1:18080:8080"
+    volumes:
+      - ./Caddyfile.staging:/etc/caddy/Caddyfile:ro
+      - staging_caddy_data:/data
+    depends_on: [api, web]
+    networks: [staging]
+    restart: unless-stopped
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    profiles: [ingestion]
+    command: python -m packages.jobs.scheduler
+    environment:
+      DATABASE_URL: ${STAGING_DATABASE_URL:?Set the staging-only database URL}
+      APP_ENV: staging
+      DEMO_MODE: "false"
+      OPERATOR_AUTH_MODE: db
+      INGESTION_SCHEDULE_ENABLED: "true"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [staging]
+    restart: unless-stopped
+networks:
+  staging:
+    ipam:
+      config:
+        - subnet: 172.30.51.0/24
+volumes:
+  staging_pgdata:
+  staging_caddy_data:
