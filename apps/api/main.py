@@ -9,10 +9,10 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from packages.domain.config import registry, rules
-from packages.domain.models import Observation, AlertTransition, IngestionRun
+from packages.domain.models import Observation, AlertTransition, IngestionRun, AdminAudit
 from packages.domain.store import engine, observations_at
 from packages.domain.settings import settings
-from packages.domain.security import RateLimiter, require_admin
+from packages.domain.security import RateLimiter, DatabaseRateLimiter, RateLimitStoreUnavailable, require_scope, client_identity
 from packages.connectors.manual import parse_manual_csv
 from packages.connectors.treasury import TreasuryAdapter
 from packages.jobs.ingest import ingest_records
@@ -26,13 +26,19 @@ DB = engine()
 DEMO = settings().demo_mode
 DEFAULT_RULESET = "v1" if DEMO else "v2"
 DEFAULT_AS_OF = datetime.fromisoformat("2026-10-31T00:00:00+05:30")
-LIMITER = RateLimiter()
+LIMITER = DatabaseRateLimiter(DB) if settings().environment in {"staging", "production"} else RateLimiter()
 
 
 @app.middleware("http")
 async def request_id(request: Request, call_next):
-    key = f"{request.client.host if request.client else 'unknown'}:{'write' if request.method != 'GET' else 'read'}"
-    if not LIMITER.allow(key, 10 if request.method != "GET" else 240):
+    peer = request.client.host if request.client else "unknown"
+    client = client_identity(peer, request.headers.get("x-smarthedge-client-ip"), settings().trusted_proxy_cidrs)
+    key = f"{client}:{'write' if request.method != 'GET' else 'read'}"
+    try:
+        allowed = LIMITER.allow(key, 10 if request.method != "GET" else 240)
+    except RateLimitStoreUnavailable:
+        return JSONResponse(status_code=503, content={"error": {"code": 503, "message": "Request admission unavailable"}})
+    if not allowed:
         return JSONResponse(status_code=429, content={"error": {"code": 429, "message": "Rate limit exceeded"}})
     try:
         body_length = int(request.headers.get("content-length", "0") or 0)
@@ -85,6 +91,9 @@ def dashboard(as_of, ruleset=None, vintage_mode="system_known"):
         else:
             result = compute_v2(session, timestamp, DEMO, vintage_mode)
             result["alerts"] = evaluate_v2(session, timestamp, DEMO, vintage_mode)
+            for alert in result["alerts"]:
+                alert.pop("_evaluations", None)
+        result["environment"] = settings().environment
         return result
 
 
@@ -188,8 +197,13 @@ def replay(as_of: str, vintage_mode: str = "system_known", ruleset: str = "v1"):
     return result
 
 
-@app.post("/api/v1/admin/imports/csv", dependencies=[Depends(require_admin)])
-async def import_csv(request: Request, x_source_provider: str = Header(), x_license_attestation: str = Header()):
+def audit_admin(session, operator_id, action, result, details=""):
+    session.add(AdminAudit(operator_id=operator_id, action=action, result=result, at=datetime.now(timezone.utc), details=details))
+    session.commit()
+
+
+@app.post("/api/v1/admin/imports/csv")
+async def import_csv(request: Request, x_source_provider: str = Header(), x_license_attestation: str = Header(), operator=Depends(require_scope("imports:write"))):
     if DEMO:
         raise HTTPException(403, "Live imports are disabled in demo mode")
     if x_license_attestation != "public-redistributable":
@@ -205,8 +219,13 @@ async def import_csv(request: Request, x_source_provider: str = Header(), x_lice
             outcome = ingest_records(session, records, raw, x_source_provider)
             if outcome["inserted"]:
                 persist_transitions(session, evaluate_v2(session, datetime.now(timezone.utc)), datetime.now(timezone.utc))
+            audit_admin(session, operator["operator_id"], "csv_import", "success", f"provider={x_source_provider};run_id={outcome['run_id']};inserted={outcome['inserted']}")
+            if outcome["revisions"]:
+                audit_admin(session, operator["operator_id"], "observation_revision", "recorded", f"run_id={outcome['run_id']};count={outcome['revisions']}")
             return outcome
     except ValueError as exc:
+        with Session(DB) as session:
+            audit_admin(session, operator["operator_id"], "csv_import", "rejected", type(exc).__name__)
         raise HTTPException(422, str(exc))
 
 
@@ -214,8 +233,8 @@ class IngestionRequest(BaseModel):
     adapter: str
 
 
-@app.post("/api/v1/admin/ingestion/run", dependencies=[Depends(require_admin)])
-def run_ingestion(payload: IngestionRequest):
+@app.post("/api/v1/admin/ingestion/run")
+def run_ingestion(payload: IngestionRequest, operator=Depends(require_scope("ingestion:run"))):
     if DEMO:
         raise HTTPException(403, "Live ingestion is disabled in demo mode")
     if payload.adapter != "us_treasury":
@@ -226,11 +245,14 @@ def run_ingestion(payload: IngestionRequest):
             outcome = ingest_records(session, records, raw, "us_treasury")
             if outcome["inserted"]:
                 persist_transitions(session, evaluate_v2(session, datetime.now(timezone.utc)), datetime.now(timezone.utc))
+            audit_admin(session, operator["operator_id"], "treasury_ingestion", "success", f"run_id={outcome['run_id']};inserted={outcome['inserted']}")
+            if outcome["revisions"]:
+                audit_admin(session, operator["operator_id"], "observation_revision", "recorded", f"run_id={outcome['run_id']};count={outcome['revisions']}")
             return outcome
     except Exception as exc:
         # Do not return upstream response content or credentials to clients.
         with Session(DB) as session:
             job = IngestionRun(provider="us_treasury", started_at=datetime.now(timezone.utc), finished_at=datetime.now(timezone.utc), status="failed", error_code=type(exc).__name__)
             session.add(job)
-            session.commit()
+            audit_admin(session, operator["operator_id"], "treasury_ingestion", "failed", type(exc).__name__)
         raise HTTPException(502, "Source ingestion failed; last known data retained")

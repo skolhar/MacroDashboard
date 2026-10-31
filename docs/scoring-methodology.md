@@ -1,5 +1,7 @@
 # Experimental v2 scoring and inflection methodology
 
+> Phase 2.5 adds a separate data-confidence score, continuity checks for live transformed histories, and immutable alert evaluation events. See `phase2-5-implementation.md`. The provisional v2 risk thresholds and fixed cycle weights remain unchanged.
+
 `config/rules.v2.yaml` is an immutable, provisional research ruleset. Its thresholds are hypotheses, not validated crash probabilities. `v1` remains available for Phase 1 compatibility. No numeric score is an investment recommendation.
 
 ## Inputs and provenance

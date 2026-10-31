@@ -1,0 +1,23 @@
+:8080 {
+    encode zstd gzip
+    log {
+        output stdout
+        format json
+    }
+
+    @admin path /api/v1/admin/*
+    handle @admin {
+        respond 403
+    }
+
+    @api path /api/v1/* /docs /docs/* /redoc /redoc/* /openapi.json
+    handle @api {
+        reverse_proxy api:8000 {
+            header_up X-SmartHedge-Client-IP {remote_host}
+        }
+    }
+
+    handle {
+        reverse_proxy web:3000
+    }
+}

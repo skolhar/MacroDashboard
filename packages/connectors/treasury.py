@@ -3,6 +3,7 @@ from datetime import datetime, time, timezone
 from decimal import Decimal
 from xml.etree import ElementTree as ET
 import httpx
+import time as clock
 from .base import SourceObservation
 
 TREASURY_URL = "https://home.treasury.gov/resource-center/data-chart-center/interest-rates/pages/xml"
@@ -47,13 +48,26 @@ class TreasuryAdapter:
         month = as_of.strftime("%Y%m")
         url = f"{TREASURY_URL}?data=daily_treasury_yield_curve&field_tdr_date_value_month={month}"
         if self.client is None:
-            with httpx.Client(timeout=10, follow_redirects=False) as client:
-                response = client.get(url)
+            with httpx.Client(timeout=httpx.Timeout(35, connect=5), follow_redirects=False) as client:
+                response = self._get_with_retry(client, url)
         else:
-            response = self.client.get(url)
+            response = self._get_with_retry(self.client, url)
         response.raise_for_status()
         if len(response.content) > 5_000_000:
             raise ValueError("Treasury response too large")
         now = datetime.now(timezone.utc)
         records = [r for r in parse_treasury_xml(response.content, now, url) if r.period_end <= as_of.date()]
         return response.content, records
+
+    @staticmethod
+    def _get_with_retry(client, url):
+        for attempt in range(3):
+            try:
+                response = client.get(url)
+                if response.status_code not in {429, 500, 502, 503, 504}:
+                    return response
+                response.raise_for_status()
+            except (httpx.TimeoutException, httpx.NetworkError, httpx.HTTPStatusError):
+                if attempt == 2:
+                    raise
+                clock.sleep(0.5 * 2 ** attempt)
