@@ -1,5 +1,7 @@
 # Phase 2 data sources and entitlements
 
+> Phase 2.5 update: the official Treasury adapter successfully ingested 21 October 2026 observations into an isolated local staging database on 31 October 2026. That database is not shipped with the repository. See `source-entitlements.md` and `staging-validation.md` for current statuses; the table below records the original Phase 2 review state.
+
 No production data is shipped in this branch. `DATA_UNAVAILABLE` is the correct live status until an approved source is imported. The synthetic Phase 1 fixture remains confined to `APP_ENV=demo`.
 
 | Priority | Indicators | Acquisition path | Status and operator requirement |

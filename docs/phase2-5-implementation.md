@@ -1,0 +1,19 @@
+# Phase 2.5 implementation
+
+This branch depends on the open Phase 2 PR #1 and preserves its Phase 1 and Phase 2 read endpoints. No production database or deployment was changed.
+
+## Architecture and controls
+
+- `docker-compose.staging.yml` creates a separate PostgreSQL volume, network, API, web app and Caddy. All published ports bind to loopback. Caddy rejects `/api/v1/admin/*`; operators use an SSH tunnel to the loopback API. `APP_ENV=staging`, `DEMO_MODE=false`, and a unique database URL are mandatory.
+- Alembic `0003` adds operator credentials, administrative audit, shared rate counters and immutable alert evaluation events. It is additive. Operators have named identities, `imports:write` or `ingestion:run` scopes, 1–90 day expiry and immediate database revocation. Only the token digest is stored. The old shared token remains accepted solely in development/demo for compatibility; staging and production require DB authentication.
+- The API accepts Caddy's overwritten client-IP header only from explicitly trusted proxy CIDRs. Staging rate counts use atomic PostgreSQL upserts shared across workers. The local Phase 1 demo keeps its lightweight in-process limiter. The scheduler removes rate rows older than one hour.
+- Successful and failed ingestion operations record an operator or scheduler identity, action, result and run ID/error class. Revision vintages are immutable and generate an audit event. Health responses contain only status, environment, mode and ruleset.
+- `packages/jobs/scheduler.py` polls the Treasury feed every six hours only when the staging profile explicitly enables it. A failed fetch records a failed run and never creates a substitute value. `packages/connectors/catalog.py` makes all other missing entitlements explicit through `UnavailableAdapter`.
+- `AlertEvaluation` stores the first point-in-time evaluation of each market session or quarterly release. Subsequent evaluations cannot overwrite it. The reducer combines older persisted events with a fresh 60-session window for multi-year reconstruction. Original alert transitions remain immutable; revised observations are separately audited.
+- `data_confidence` is distinct from reflexivity risk. For live v2 it is `100 × (0.60 × weighted signal coverage + 0.25 × eligible indicator fraction + 0.15 × min(1, distinct eligible providers / 3))`, rounded to an integer. Stale, conflicting and missing features are ineligible. Demo confidence is N/A. It measures data support, not forecast certainty.
+- Each cycle card shows its risk reading 56 days ago, 28 days ago and now, using observations available at each respective evaluation time. Missing historical scores remain N/A; no chart is drawn from unsupported history.
+- Live transformed series require contiguous periods for their stated daily, weekly, monthly, quarterly or annual frequency. Gaps make the feature unavailable. Demo fixtures retain their original behavior. Fixed cycle weights and the rule's 70% cycle/75% composite thresholds remain unchanged.
+
+## Known methodology limits
+
+Only the U.S. Treasury adapter has completed an official-source staging fetch. One live source cannot produce a six-cycle risk score or validated inflection alert. The Treasury XML does not provide verified original publication times for historical rows; first ingestion is conservatively recorded as publication time. No historical rule or indicator-definition activation registry exists yet, so replay of old dates with v2 rules remains explicitly experimental. Checkpoints are durable only after the first staging ingestion; pre-staging periods cannot be reconstructed as if they had been continuously monitored. The 2027 NSE calendar remains unverified. Independent financial methodology and entitlement review is still required before public signals.
