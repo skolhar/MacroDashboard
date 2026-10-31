@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select
 from packages.domain.calendar import recent_sessions
 from packages.domain.config import rules
-from packages.domain.models import AlertTransition, Observation
+from packages.domain.models import AlertTransition, AlertEvaluation, Observation
 from .engine_v2 import _core
 
 
@@ -30,8 +30,8 @@ def _times(session, rule, as_of, demo, vintage_mode):
         return release_instants(session.scalars(query).all(), as_of, vintage_mode)
     tz = ZoneInfo("Asia/Kolkata")
     dates = recent_sessions(as_of.astimezone(tz), "india", 60)
-    times = [datetime.combine(day, time(23, 59), tz) for day in dates]
-    return [min(as_of, instant) for instant in times if instant <= as_of or instant.date() == as_of.astimezone(tz).date()]
+    times = [datetime.combine(day, time(18, 0), tz) for day in dates]
+    return [instant for instant in times if instant <= as_of]
 
 
 def _evidence(metrics, rule):
@@ -87,9 +87,14 @@ def evaluate_v2(session, as_of: datetime, demo=False, vintage_mode="system_known
     cache = {}
     for rule in rules("v2")["alerts"]:
         checks = []
+        evaluation_events = []
         latest_evidence = []
         evaluated_at = as_of
-        for instant in _times(session, rule, as_of, demo, vintage_mode):
+        instants = _times(session, rule, as_of, demo, vintage_mode)
+        if instants and vintage_mode == "system_known":
+            older = session.scalars(select(AlertEvaluation).where(AlertEvaluation.rule_id == rule["id"], AlertEvaluation.ruleset_version == "v2", AlertEvaluation.mode == ("demo" if demo else "live"), AlertEvaluation.event_at < instants[0], AlertEvaluation.recorded_at <= as_of).order_by(AlertEvaluation.event_at)).all()
+            checks.extend((row.known, row.triggered) for row in older)
+        for instant in instants:
             key = instant.isoformat()
             if key not in cache:
                 cache[key] = _core(session, instant, demo, vintage_mode)["metrics"]
@@ -97,17 +102,22 @@ def evaluate_v2(session, as_of: datetime, demo=False, vintage_mode="system_known
             known = sum(e["result"] is not None for e in evidence)
             triggered = sum(e["result"] is True for e in evidence)
             checks.append((known, triggered))
+            evaluation_events.append({"event_at": instant, "known": known, "triggered": triggered, "evidence": evidence})
             latest_evidence = evidence
             evaluated_at = instant
         status, watch, recovery = status_for_evaluations(checks, rule)
         unit = "releases" if rule.get("cadence") == "publication" else "days"
-        output.append({"id": f"{rule['id']}:v2:IN:{'demo' if demo else 'live'}", "rule_id": rule["id"], "label": rule["label"], "ruleset_version": "v2", "status": status, "severity": status if status in {"WATCH", "TRIGGERED", "CONFIRMED"} else None, "demo": demo, "triggered_at": evaluated_at.isoformat() if status in {"WATCH", "TRIGGERED", "CONFIRMED"} else None, "evaluated_at": as_of.isoformat(), "persistence_count": watch, "recovery_count": recovery, "evidence": latest_evidence, "counter_signals": [e for e in latest_evidence if e["result"] is False], "confirmation_conditions": [e for e in latest_evidence if e["result"] is not True], "invalidation_condition": f"Fewer than {rule['watch_count']} conditions for {rule[f'recovery_{unit}']} {unit}", "confidence": "demo" if demo else "provisional" if sum(e["result"] is not None for e in latest_evidence) >= rule["min_known"] else "insufficient"})
+        output.append({"id": f"{rule['id']}:v2:IN:{'demo' if demo else 'live'}", "rule_id": rule["id"], "label": rule["label"], "ruleset_version": "v2", "status": status, "severity": status if status in {"WATCH", "TRIGGERED", "CONFIRMED"} else None, "demo": demo, "triggered_at": evaluated_at.isoformat() if status in {"WATCH", "TRIGGERED", "CONFIRMED"} else None, "evaluated_at": as_of.isoformat(), "persistence_count": watch, "recovery_count": recovery, "evidence": latest_evidence, "counter_signals": [e for e in latest_evidence if e["result"] is False], "confirmation_conditions": [e for e in latest_evidence if e["result"] is not True], "invalidation_condition": f"Fewer than {rule['watch_count']} conditions for {rule[f'recovery_{unit}']} {unit}", "confidence": "demo" if demo else "provisional" if sum(e["result"] is not None for e in latest_evidence) >= rule["min_known"] else "insufficient", "_evaluations": evaluation_events})
     return output
 
 
 def persist_transitions(session, alerts, as_of):
     inserted = 0
     for alert in alerts:
+        for event in alert.get("_evaluations", []):
+            key = (alert["rule_id"], alert["ruleset_version"], "demo" if alert["demo"] else "live", event["event_at"])
+            if session.get(AlertEvaluation, key) is None:
+                session.add(AlertEvaluation(rule_id=key[0], ruleset_version=key[1], mode=key[2], event_at=key[3], recorded_at=as_of, known=event["known"], triggered=event["triggered"], evidence_json=json.dumps(event["evidence"])))
         latest = session.scalar(select(AlertTransition).where(AlertTransition.rule_id == alert["rule_id"], AlertTransition.ruleset_version == alert["ruleset_version"], AlertTransition.mode == ("demo" if alert["demo"] else "live")).order_by(AlertTransition.evaluated_at.desc()))
         if latest and latest.status == alert["status"]:
             continue

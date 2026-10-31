@@ -52,6 +52,7 @@ def ingest_records(session: Session, records: list[SourceObservation], raw: byte
     if session.scalar(select(RawSnapshot.id).where(RawSnapshot.content_hash == digest)) is None:
         session.add(RawSnapshot(provider=provider, content_hash=digest, received_at=now, source_url=records[0].source_reference))
     inserted = 0
+    revisions = 0
     for record in records:
         existing = session.scalar(select(Observation).where(Observation.indicator_id == record.indicator_id, Observation.period_start == record.period_start, Observation.period_end == record.period_end, Observation.provider == provider, Observation.vintage_id == record.vintage_id))
         if existing:
@@ -66,8 +67,9 @@ def ingest_records(session: Session, records: list[SourceObservation], raw: byte
                 quality = "source_conflict"
         session.add(Observation(indicator_id=record.indicator_id, period_start=record.period_start, period_end=record.period_end, value=record.value, unit=record.unit, published_at=record.published_at, ingested_at=now, provider=provider, source_url=record.source_reference, vintage_id=record.vintage_id, quality=quality, is_revision=prior is not None, is_demo=record.is_demo, source_identifier=provider, source_reference=record.source_reference, content_hash=digest))
         inserted += 1
+        revisions += int(prior is not None)
     run.status = "success"
     run.finished_at = datetime.now(timezone.utc)
     run.item_count = inserted
     session.commit()
-    return {"inserted": inserted, "duplicate": len(records) - inserted, "snapshot_sha256": digest, "run_id": run.id}
+    return {"inserted": inserted, "duplicate": len(records) - inserted, "revisions": revisions, "snapshot_sha256": digest, "run_id": run.id}
