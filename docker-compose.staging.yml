@@ -47,6 +47,9 @@ services:
     environment:
       API_INTERNAL_URL: http://api:8000
       API_DOCS_URL: http://localhost:18000/docs
+      RESEARCH_OPERATOR_TOKEN: ${STAGING_RESEARCH_OPERATOR_TOKEN:-}
+      RESEARCH_UI_USER: ${STAGING_RESEARCH_UI_USER:-}
+      RESEARCH_UI_PASSWORD: ${STAGING_RESEARCH_UI_PASSWORD:-}
     depends_on: [api]
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://web:3000/', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
