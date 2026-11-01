@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 import json
 import os
 import base64
@@ -26,6 +26,10 @@ from packages.scoring.alerts import fx_alert
 from packages.scoring.engine_v2 import compute_v2
 from packages.scoring.inflections import evaluate_v2, persist_transitions
 from packages.scoring.external_liquidity import external_liquidity_view
+from packages.market.base import instruments as market_instruments_registry
+from packages.market.yahoo import MarketSourceUnavailable
+from packages.market.providers import provider_for
+from packages.market.operations import history_at as market_history_at, status_at as market_status_at, refresh as refresh_market
 
 app = FastAPI(title="India Macro Reflexivity Dashboard", version="0.2.0")
 DB = engine()
@@ -152,6 +156,65 @@ def indicator_series(indicator_id: str, as_of: str | None = None, from_date: str
         rows = observations_at(session, indicator_id, parsed_as_of(as_of), vintage_mode, DEMO)
         rows = [r for r in rows if (not start or r.period_end >= start) and (not end or r.period_end <= end)]
         return {"indicator_id": indicator_id, "mode": "demo" if DEMO else "live", "vintage_mode": vintage_mode, "items": [{"id": r.id, "period_start": r.period_start.isoformat(), "period_end": r.period_end.isoformat(), "value": float(r.value), "unit": r.unit, "published_at": r.published_at.isoformat(), "ingested_at": r.ingested_at.isoformat(), "provider": r.provider, "rate_kind": r.rate_kind or ("published_reference_rate" if indicator_id == "usd_inr_spot" and r.provider in {"rbi", "fbil"} else None), "source_url": r.source_url, "vintage_id": r.vintage_id, "release_review_id": r.release_review_id, "quality": r.quality, "is_revision": r.is_revision} for r in rows]}
+
+
+def market_research_available() -> bool:
+    return settings().market_research_enabled
+
+
+@app.get("/api/v1/market/instruments")
+def market_instruments(as_of: str | None = None):
+    specs = market_instruments_registry()
+    enabled = market_research_available()
+    provider = settings().market_provider
+    ready = enabled and provider == "yahoo"
+    timestamp = parsed_as_of(as_of) if as_of else datetime.now(timezone.utc)
+    with Session(DB) as session:
+        return {"mode": "isolated_research" if ready else "unavailable", "provider": provider, "as_of": timestamp.isoformat(), "items": [{"id": item.id, "name": item.name, "kind": item.kind, "market": item.market, "currency": item.currency, "timezone": item.timezone, "provider": provider, "provider_symbol": item.symbol(provider), "future_upstox_mapping": "UNAVAILABLE" if item.upstox is None else "CONFIGURED", "status": market_status_at(session, item, provider, timestamp) if ready else {"status": "DATA_UNAVAILABLE", "reason": "Market research feed or provider adapter is unavailable; no synthetic fallback"}} for item in specs.values()]}
+
+
+@app.get("/api/v1/market/instruments/{instrument_id}/history")
+def market_history(instrument_id: str, as_of: str | None = None, from_date: date | None = Query(None, alias="from"), to_date: date | None = Query(None, alias="to"), basis: str = "raw", limit: int = Query(1000, ge=1, le=3000)):
+    spec = market_instruments_registry().get(instrument_id)
+    if spec is None:
+        raise HTTPException(404, "Unknown market instrument")
+    if basis not in {"raw", "adjusted_close"} or (from_date and to_date and from_date > to_date):
+        raise HTTPException(422, "Invalid market history query")
+    enabled = market_research_available()
+    provider = settings().market_provider
+    ready = enabled and provider == "yahoo"
+    timestamp = parsed_as_of(as_of) if as_of else datetime.now(timezone.utc)
+    with Session(DB) as session:
+        rows = market_history_at(session, instrument_id, provider, timestamp, from_date, to_date)[-limit:] if ready else []
+        return {"instrument_id": instrument_id, "provider": provider, "provider_symbol": spec.symbol(provider), "as_of": timestamp.isoformat(), "basis": basis, "adjusted_ohlc_available": False, "status": market_status_at(session, spec, provider, timestamp) if ready else {"status": "DATA_UNAVAILABLE", "reason": "Market research feed or provider adapter is unavailable"}, "items": [{"session_date": row.session_date.isoformat(), "open": float(row.open) if basis == "raw" else None, "high": float(row.high) if basis == "raw" else None, "low": float(row.low) if basis == "raw" else None, "close": float(row.close) if basis == "raw" else float(row.adjusted_close) if row.adjusted_close is not None else None, "raw_open": float(row.open), "raw_high": float(row.high), "raw_low": float(row.low), "raw_close": float(row.close), "adjusted_close": float(row.adjusted_close) if row.adjusted_close is not None else None, "volume": row.volume, "currency": row.currency, "market": row.market, "exchange_timezone": row.exchange_timezone, "provider_exchange": row.provider_exchange, "retrieved_at": row.retrieved_at.isoformat(), "source_url": row.source_url, "quality": row.quality, "price_basis": row.price_basis, "content_hash": row.content_hash, "contract_identity": row.contract_identity, "roll_policy": row.roll_policy} for row in rows]}
+
+
+class MarketRefreshRequest(BaseModel):
+    instrument_id: str
+    provider: str | None = None
+    start: date | None = None
+    end_exclusive: date | None = None
+
+
+@app.post("/api/v1/admin/market/refresh")
+def market_refresh(payload: MarketRefreshRequest, operator=Depends(require_scope("ingestion:run"))):
+    if not market_research_available():
+        raise HTTPException(403, "Market research ingestion is disabled")
+    spec = market_instruments_registry().get(payload.instrument_id)
+    provider_name = payload.provider or settings().market_provider
+    if spec is None or provider_name not in {"yahoo", "upstox"} or provider_name != settings().market_provider or spec.symbol(provider_name) is None:
+        raise HTTPException(422, "Unknown instrument or provider")
+    with Session(DB) as session:
+        try:
+            result = refresh_market(session, provider_for(provider_name), spec, payload.start, payload.end_exclusive)
+            audit_admin(session, operator["operator_id"], "market_refresh", result["status"], f"instrument={spec.id};provider={provider_name};inserted={result['inserted']}")
+            return result
+        except ValueError as exc:
+            audit_admin(session, operator["operator_id"], "market_refresh", "rejected", type(exc).__name__)
+            raise HTTPException(422, str(exc))
+        except MarketSourceUnavailable as exc:
+            audit_admin(session, operator["operator_id"], "market_refresh", "failed", type(exc).__name__)
+            raise HTTPException(503, "Yahoo source unavailable")
 
 
 @app.get("/api/v1/cycles/{cycle_id}")

@@ -1,6 +1,6 @@
 from datetime import date, datetime, timezone
 from decimal import Decimal
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.types import TypeDecorator
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -143,6 +143,49 @@ class IngestionRun(Base):
     status: Mapped[str] = mapped_column(String(30))
     item_count: Mapped[int] = mapped_column(Integer, default=0)
     error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+
+class MarketBar(Base):
+    """Append-only secondary price vintage, separate from governed macro releases."""
+    __tablename__ = "market_bars"
+    __table_args__ = (UniqueConstraint("instrument_id", "provider", "session_date", "content_hash"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    instrument_id: Mapped[str] = mapped_column(String(80), index=True)
+    provider: Mapped[str] = mapped_column(String(40))
+    provider_symbol: Mapped[str] = mapped_column(String(80))
+    market: Mapped[str] = mapped_column(String(40))
+    currency: Mapped[str] = mapped_column(String(10))
+    exchange_timezone: Mapped[str] = mapped_column(String(60))
+    provider_exchange: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    session_date: Mapped[date] = mapped_column(Date, index=True)
+    open: Mapped[Decimal] = mapped_column(Numeric(24, 8))
+    high: Mapped[Decimal] = mapped_column(Numeric(24, 8))
+    low: Mapped[Decimal] = mapped_column(Numeric(24, 8))
+    close: Mapped[Decimal] = mapped_column(Numeric(24, 8))
+    adjusted_close: Mapped[Decimal | None] = mapped_column(Numeric(24, 8), nullable=True)
+    volume: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    price_basis: Mapped[str] = mapped_column(String(30))
+    source_url: Mapped[str] = mapped_column(Text)
+    retrieved_at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
+    quality: Mapped[str] = mapped_column(String(40))
+    content_hash: Mapped[str] = mapped_column(String(64))
+    contract_identity: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    roll_policy: Mapped[str | None] = mapped_column(String(120), nullable=True)
+
+
+class MarketFetchRun(Base):
+    __tablename__ = "market_fetch_runs"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    instrument_id: Mapped[str] = mapped_column(String(80), index=True)
+    provider: Mapped[str] = mapped_column(String(40))
+    requested_start: Mapped[date] = mapped_column(Date)
+    requested_end: Mapped[date] = mapped_column(Date)
+    started_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    finished_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    status: Mapped[str] = mapped_column(String(30))
+    item_count: Mapped[int] = mapped_column(Integer)
+    rejected_count: Mapped[int] = mapped_column(Integer, default=0)
+    error_code: Mapped[str | None] = mapped_column(String(80), nullable=True)
 
 
 class AlertTransition(Base):

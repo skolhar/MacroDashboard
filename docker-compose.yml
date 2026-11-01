@@ -20,6 +20,8 @@ services:
       APP_ENV: ${APP_ENV:-demo}
       DEMO_MODE: ${DEMO_MODE:-true}
       ADMIN_TOKEN_SHA256: ${ADMIN_TOKEN_SHA256:-}
+      MARKET_DATA_RESEARCH_ENABLED: ${MARKET_DATA_RESEARCH_ENABLED:-false}
+      MARKET_DATA_PROVIDER: ${MARKET_DATA_PROVIDER:-yahoo}
     depends_on:
       db:
         condition: service_healthy

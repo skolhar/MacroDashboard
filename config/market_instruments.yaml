@@ -1,0 +1,17 @@
+version: market-instruments-v1
+instruments:
+  - {id: nifty50, name: Nifty 50, kind: index, market: NSE, currency: INR, timezone: Asia/Kolkata, yahoo: '^NSEI', upstox: null}
+  - {id: usd_inr_yahoo, name: USD/INR Yahoo quote, kind: fx, market: GLOBAL_FX, currency: INR, timezone: Europe/London, yahoo: 'INR=X', upstox: null}
+  - {id: wti_front_yahoo, name: WTI front-month futures proxy, kind: futures_proxy, market: GLOBAL_FUTURES, currency: USD, timezone: America/New_York, yahoo: 'CL=F', upstox: null}
+  - {id: brent_front_yahoo, name: Brent front-month futures proxy, kind: futures_proxy, market: GLOBAL_FUTURES, currency: USD, timezone: America/New_York, yahoo: 'BZ=F', upstox: null}
+  - {id: gold_front_yahoo, name: Gold front-month futures proxy, kind: futures_proxy, market: GLOBAL_FUTURES, currency: USD, timezone: America/New_York, yahoo: 'GC=F', upstox: null}
+  - {id: niftybees, name: Nifty 50 BeES ETF, kind: etf, market: NSE, currency: INR, timezone: Asia/Kolkata, yahoo: 'NIFTYBEES.NS', upstox: null}
+  - {id: setfnn50, name: Nifty Next 50 ETF, kind: etf, market: NSE, currency: INR, timezone: Asia/Kolkata, yahoo: 'SETFNN50.NS', upstox: null}
+  - {id: midcapetf, name: Midcap 150 ETF, kind: etf, market: NSE, currency: INR, timezone: Asia/Kolkata, yahoo: 'MIDCAPETF.NS', upstox: null}
+  - {id: mon100, name: Nasdaq 100 ETF, kind: etf, market: NSE, currency: INR, timezone: Asia/Kolkata, yahoo: 'MON100.NS', upstox: null}
+  - {id: masptop50, name: S&P 500 Top 50 ETF, kind: etf, market: NSE, currency: INR, timezone: Asia/Kolkata, yahoo: 'MASPTOP50.NS', upstox: null}
+  - {id: hngsngbees, name: Hang Seng BeES ETF, kind: etf, market: NSE, currency: INR, timezone: Asia/Kolkata, yahoo: 'HNGSNGBEES.NS', upstox: null}
+  - {id: goldbees, name: Gold BeES ETF, kind: etf, market: NSE, currency: INR, timezone: Asia/Kolkata, yahoo: 'GOLDBEES.NS', upstox: null}
+  - {id: silvercase, name: Silver ETF, kind: etf, market: NSE, currency: INR, timezone: Asia/Kolkata, yahoo: 'SILVERCASE.NS', upstox: null}
+  - {id: liquidcase, name: Liquid ETF, kind: etf, market: NSE, currency: INR, timezone: Asia/Kolkata, yahoo: 'LIQUIDCASE.NS', upstox: null}
+  - {id: ltgiltbees, name: Long-term gilt ETF, kind: etf, market: NSE, currency: INR, timezone: Asia/Kolkata, yahoo: 'LTGILTBEES.NS', upstox: null}
