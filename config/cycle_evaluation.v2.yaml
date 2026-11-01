@@ -1,0 +1,16 @@
+version: cycle-evaluation-v2
+freshness_days:
+  business_daily: 7
+  daily: 7
+  weekly: 21
+  monthly: 75
+  quarterly: 210
+  annual: 450
+  event: 90
+transition:
+  mature_feedback_periods: 2
+  reversing_feedback_periods: 2
+  reversing_balancing_periods: 2
+  candidate_balancing_periods: 2
+  # A prior, immutable assessment must show an established reinforcing loop.
+  prior_states: [emerging, strengthening, mature / persistent]

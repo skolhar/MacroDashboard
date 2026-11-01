@@ -14,7 +14,7 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from packages.domain.config import registry, rules
-from packages.domain.models import Observation, AlertTransition, IngestionRun, AdminAudit, SourceReleaseReview, RBIReserveComponent, ResearchEvidence, CycleInvestigation
+from packages.domain.models import Observation, AlertTransition, IngestionRun, AdminAudit, SourceReleaseReview, RBIReserveComponent, ResearchEvidence, ResearchInterpretation, CycleAssessmentSnapshot, CycleInvestigation
 from packages.domain.store import engine, observations_at
 from packages.domain.settings import settings
 from packages.domain.security import RateLimiter, DatabaseRateLimiter, RateLimitStoreUnavailable, require_scope, client_identity, authorize_token
@@ -33,7 +33,7 @@ from packages.market.base import instruments as market_instruments_registry
 from packages.market.yahoo import MarketSourceUnavailable
 from packages.market.providers import provider_for
 from packages.market.operations import history_at as market_history_at, status_at as market_status_at, refresh as refresh_market
-from packages.scoring.cycle_intelligence import catalog as mechanism_catalog, evaluate as evaluate_cycles
+from packages.scoring.cycle_intelligence import catalog as mechanism_catalog, evaluate as evaluate_cycles, persist_assessment, replay_snapshot
 
 app = FastAPI(title="India Macro Reflexivity Dashboard", version="0.2.0")
 DB = engine()
@@ -147,9 +147,9 @@ def research_writer(x_admin_token: str | None = Header(default=None)):
 
 
 class ResearchEvidenceRequest(BaseModel):
-    cycle_id: str
-    mechanism_id: str
+    indicator_key: str | None = Field(default=None, min_length=3, max_length=100)
     indicator_or_claim: str = Field(min_length=3, max_length=160)
+    frequency: Literal["business_daily", "daily", "weekly", "monthly", "quarterly", "annual", "event"] = "event"
     value_text: str | None = Field(default=None, min_length=1, max_length=1000)
     value_numeric: Decimal | None = None
     unit: str | None = Field(default=None, max_length=40)
@@ -161,8 +161,13 @@ class ResearchEvidenceRequest(BaseModel):
     reliability_note: str = Field(min_length=10, max_length=2000)
     usage_basis: str = Field(min_length=10, max_length=1000)
     quality: Literal["preliminary", "estimated", "secondary", "revised", "verified"]
-    stance: Literal["supports", "contradicts", "neutral"]
+    revision_id: str = Field(default="legacy-unclassified", min_length=1, max_length=80)
     observation_key: str = Field(min_length=8, max_length=160)
+    # Original PR #16 clients may still send these fields. They are never
+    # stored as source facts or treated as a causal interpretation.
+    cycle_id: str | None = None
+    mechanism_id: str | None = None
+    stance: Literal["supports", "contradicts", "neutral"] | None = None
 
     @model_validator(mode="after")
     def value_required(self):
@@ -170,6 +175,8 @@ class ResearchEvidenceRequest(BaseModel):
             raise ValueError("Numeric value or qualitative finding required")
         if self.value_numeric is not None and not self.value_numeric.is_finite():
             raise ValueError("Numeric research value must be finite")
+        if self.indicator_key is None:
+            self.indicator_key = "legacy_" + hashlib.sha256(self.observation_key.encode()).hexdigest()[:16]
         return self
 
 
@@ -180,34 +187,109 @@ def research_catalog():
 
 @app.get("/api/v1/research/overview")
 def research_overview(as_of: str | None = None, operator=Depends(research_reader)):
+    timestamp = parsed_as_of(as_of)
     with Session(DB) as session:
-        result = evaluate_cycles(session, parsed_as_of(as_of))
-        result["investigations"] = [{"id": row.id, "cycle_id": row.cycle_id, "candidate_key": row.candidate_key, "status": row.status, "opened_at": row.opened_at.isoformat()} for row in session.scalars(select(CycleInvestigation).order_by(CycleInvestigation.opened_at.desc()).limit(30)).all()]
+        result = evaluate_cycles(session, timestamp)
+        result["investigations"] = [{"id": row.id, "cycle_id": row.cycle_id, "candidate_key": row.candidate_key, "status": row.status, "opened_at": row.opened_at.isoformat()} for row in session.scalars(select(CycleInvestigation).where(CycleInvestigation.opened_at <= timestamp).order_by(CycleInvestigation.opened_at.desc()).limit(30)).all()]
         return result
 
 
 @app.post("/api/v1/research/evidence")
 def add_research_evidence(payload: ResearchEvidenceRequest, operator=Depends(research_writer)):
-    cfg = mechanism_catalog()["cycles"]
-    if payload.cycle_id not in cfg or payload.mechanism_id not in {m["id"] for m in cfg[payload.cycle_id]["mechanisms"]}:
-        raise HTTPException(422, "Unknown cycle mechanism")
     now = datetime.now(timezone.utc)
     if payload.period_start > payload.period_end or payload.period_end > now.date() or (payload.published_at and (payload.published_at.tzinfo is None or payload.published_at > now)):
         raise HTTPException(422, "Invalid observation period or publication timestamp")
     if not payload.source_reference.startswith("https://") or not payload.usage_basis.strip():
         raise HTTPException(422, "Attributable HTTPS source and permitted-use basis required")
     with Session(DB) as session:
+        raw_fields = payload.model_dump(exclude={"cycle_id", "mechanism_id", "stance"})
+        legacy_fields = any(getattr(payload, field) is not None for field in ("cycle_id", "mechanism_id", "stance"))
         prior = session.scalar(select(ResearchEvidence).where(ResearchEvidence.observation_key == payload.observation_key))
         if prior:
-            if any(getattr(prior, key) != getattr(payload, key) for key in type(payload).model_fields if key != "observation_key"):
+            if any(getattr(prior, key) != value for key, value in raw_fields.items() if key != "observation_key"):
                 raise HTTPException(409, "Observation key already names different evidence")
-            return {"id": prior.id, "status": "duplicate"}
-        item = ResearchEvidence(**payload.model_dump(), retrieved_at=now, entered_by=operator["operator_id"])
+            return {"id": prior.id, "status": "duplicate", "legacy_causal_fields_ignored": legacy_fields}
+        item = ResearchEvidence(**raw_fields, retrieved_at=now, entered_by=operator["operator_id"])
         session.add(item)
         session.flush()
         item_id = item.id
-        audit_admin(session, operator["operator_id"], "research_evidence_add", "success", f"id={item_id};cycle={payload.cycle_id};source={payload.source_name}")
-        return {"id": item_id, "status": "recorded", "retrieved_at": now.isoformat(), "tier": "private_research"}
+        audit_admin(session, operator["operator_id"], "research_evidence_add", "success", f"id={item_id};indicator={payload.indicator_key};source={payload.source_name};revision={payload.revision_id}")
+        return {"id": item_id, "status": "recorded", "retrieved_at": now.isoformat(), "tier": "private_research", "legacy_causal_fields_ignored": legacy_fields}
+
+
+class ResearchInterpretationRequest(BaseModel):
+    observation_id: int = Field(gt=0)
+    related_observation_id: int | None = Field(default=None, gt=0)
+    cycle_id: str
+    mechanism_id: str
+    evidence_type: Literal["trend", "feedback_link", "corrective_response", "policy_response"]
+    stance: Literal["supports", "contradicts", "neutral"]
+    rationale: str = Field(min_length=30, max_length=3000)
+    alternative_explanations: list[str] = Field(min_length=1, max_length=8)
+    interpretation_key: str = Field(min_length=8, max_length=160)
+    revision_id: str = Field(min_length=1, max_length=80)
+    supersedes_id: int | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def explain_causal_claim(self):
+        if any(len(item.strip()) < 5 for item in self.alternative_explanations):
+            raise ValueError("Each alternative explanation needs meaningful text")
+        return self
+
+
+@app.post("/api/v1/research/interpretations")
+def add_research_interpretation(payload: ResearchInterpretationRequest, operator=Depends(research_writer)):
+    cfg = mechanism_catalog()["cycles"]
+    mechanism = next((m for m in cfg.get(payload.cycle_id, {}).get("mechanisms", []) if m["id"] == payload.mechanism_id), None)
+    if mechanism is None or (mechanism["role"] == "reinforcing") != (payload.evidence_type in {"trend", "feedback_link"}):
+        raise HTTPException(422, "Evidence type does not match a known mechanism")
+    with Session(DB) as session:
+        prior = session.scalar(select(ResearchInterpretation).where(ResearchInterpretation.interpretation_key == payload.interpretation_key))
+        if prior:
+            if any(getattr(prior, key) != getattr(payload, key) for key in ("observation_id", "related_observation_id", "cycle_id", "mechanism_id", "evidence_type", "stance", "rationale", "revision_id", "supersedes_id")) or json.loads(prior.alternatives_json) != payload.alternative_explanations:
+                raise HTTPException(409, "Interpretation key already names a different assessment")
+            return {"id": prior.id, "status": "duplicate"}
+        observed = session.get(ResearchEvidence, payload.observation_id)
+        related = session.get(ResearchEvidence, payload.related_observation_id) if payload.related_observation_id else None
+        if observed is None or (payload.related_observation_id and related is None):
+            raise HTTPException(422, "Research observation not found")
+        if payload.evidence_type == "feedback_link" and (related is None or related.indicator_key == observed.indicator_key or related.period_end > observed.period_end):
+            raise HTTPException(422, "Feedback interpretation needs an earlier independent observed driver")
+        if payload.evidence_type != "feedback_link" and related is not None:
+            raise HTTPException(422, "Related observation applies only to a feedback link")
+        if payload.supersedes_id:
+            earlier = session.get(ResearchInterpretation, payload.supersedes_id)
+            if earlier is None or (earlier.observation_id, earlier.cycle_id, earlier.mechanism_id, earlier.entered_by) != (payload.observation_id, payload.cycle_id, payload.mechanism_id, operator["operator_id"]):
+                raise HTTPException(422, "Revision must supersede this operator's prior interpretation of the same observation and mechanism")
+        now = datetime.now(timezone.utc)
+        item = ResearchInterpretation(observation_id=payload.observation_id, related_observation_id=payload.related_observation_id, cycle_id=payload.cycle_id, mechanism_id=payload.mechanism_id, evidence_type=payload.evidence_type, stance=payload.stance, rationale=payload.rationale, alternatives_json=json.dumps(payload.alternative_explanations), interpretation_key=payload.interpretation_key, revision_id=payload.revision_id, supersedes_id=payload.supersedes_id, assessed_at=now, entered_by=operator["operator_id"])
+        session.add(item)
+        session.flush()
+        item_id = item.id
+        audit_admin(session, operator["operator_id"], "research_interpretation_add", "success", f"id={item_id};observation={observed.id};cycle={payload.cycle_id};mechanism={payload.mechanism_id};revision={payload.revision_id}")
+        return {"id": item_id, "status": "recorded", "assessed_at": now.isoformat()}
+
+
+class AssessmentRequest(BaseModel):
+    assessment_key: str = Field(min_length=8, max_length=160)
+
+
+@app.post("/api/v1/research/assessments")
+def record_research_assessment(payload: AssessmentRequest, operator=Depends(research_writer)):
+    now = datetime.now(timezone.utc)
+    with Session(DB) as session:
+        row = persist_assessment(session, now, payload.assessment_key, operator["operator_id"], now)
+        audit_admin(session, operator["operator_id"], "research_assessment_record", "success", f"id={row.id};key={row.assessment_key};catalog={row.catalog_version};rules={row.rule_version}")
+        return {"id": row.id, "assessment_key": row.assessment_key, "as_of": row.as_of.isoformat(), "catalog_version": row.catalog_version, "rule_version": row.rule_version}
+
+
+@app.get("/api/v1/research/assessments/{assessment_id}")
+def get_research_assessment(assessment_id: int, operator=Depends(research_reader)):
+    with Session(DB) as session:
+        row = session.get(CycleAssessmentSnapshot, assessment_id)
+        if row is None:
+            raise HTTPException(404, "Research assessment not found")
+        return replay_snapshot(row)
 
 
 class InvestigationRequest(BaseModel):
@@ -257,9 +339,10 @@ def update_investigation(investigation_id: int, payload: InvestigationStatusRequ
         item = session.get(CycleInvestigation, investigation_id)
         if not item:
             raise HTTPException(404, "Investigation not found")
+        prior_status = item.status
         item.status = payload.status
         item.updated_at = datetime.now(timezone.utc)
-        audit_admin(session, operator["operator_id"], "research_investigation_status", "success", f"id={item.id};status={item.status}")
+        audit_admin(session, operator["operator_id"], "research_investigation_status", "success", f"id={item.id};from={prior_status};to={item.status}")
         return {"id": item.id, "status": item.status}
 
 

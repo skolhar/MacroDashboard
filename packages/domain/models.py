@@ -200,12 +200,12 @@ class MarketFetchRun(Base):
 
 
 class ResearchEvidence(Base):
-    """Private exploratory claim; never a governed or demo observation."""
+    """Immutable private source observation, without an inferred causal stance."""
     __tablename__ = "research_evidence"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    cycle_id: Mapped[str] = mapped_column(String(40), index=True)
-    mechanism_id: Mapped[str] = mapped_column(String(80))
+    indicator_key: Mapped[str] = mapped_column(String(100), index=True)
     indicator_or_claim: Mapped[str] = mapped_column(String(160))
+    frequency: Mapped[str] = mapped_column(String(20))
     value_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     value_numeric: Mapped[Decimal | None] = mapped_column(Numeric(24, 8), nullable=True)
     unit: Mapped[str | None] = mapped_column(String(40), nullable=True)
@@ -218,9 +218,46 @@ class ResearchEvidence(Base):
     reliability_note: Mapped[str] = mapped_column(Text)
     usage_basis: Mapped[str] = mapped_column(Text)
     quality: Mapped[str] = mapped_column(String(30))
-    stance: Mapped[str] = mapped_column(String(20))
+    revision_id: Mapped[str] = mapped_column(String(80))
     observation_key: Mapped[str] = mapped_column(String(160), unique=True)
     entered_by: Mapped[str] = mapped_column(String(100))
+
+
+class ResearchInterpretation(Base):
+    """Append-only analyst claim linked to source observations."""
+    __tablename__ = "research_interpretations"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    observation_id: Mapped[int] = mapped_column(ForeignKey("research_evidence.id"), index=True)
+    related_observation_id: Mapped[int | None] = mapped_column(ForeignKey("research_evidence.id"), nullable=True)
+    cycle_id: Mapped[str] = mapped_column(String(40), index=True)
+    mechanism_id: Mapped[str] = mapped_column(String(80))
+    evidence_type: Mapped[str] = mapped_column(String(30))
+    stance: Mapped[str] = mapped_column(String(20))
+    rationale: Mapped[str] = mapped_column(Text)
+    alternatives_json: Mapped[str] = mapped_column(Text)
+    interpretation_key: Mapped[str] = mapped_column(String(160), unique=True)
+    revision_id: Mapped[str] = mapped_column(String(80))
+    supersedes_id: Mapped[int | None] = mapped_column(ForeignKey("research_interpretations.id"), nullable=True)
+    assessed_at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
+    entered_by: Mapped[str] = mapped_column(String(100))
+
+
+class CycleAssessmentSnapshot(Base):
+    """Immutable dated evaluation with exact input and rule/catalog copies."""
+    __tablename__ = "cycle_assessment_snapshots"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    assessment_key: Mapped[str] = mapped_column(String(160), unique=True)
+    as_of: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
+    recorded_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    catalog_version: Mapped[str] = mapped_column(String(80))
+    catalog_json: Mapped[str] = mapped_column(Text)
+    rule_version: Mapped[str] = mapped_column(String(80))
+    rules_json: Mapped[str] = mapped_column(Text)
+    evidence_ids_json: Mapped[str] = mapped_column(Text)
+    interpretation_ids_json: Mapped[str] = mapped_column(Text)
+    input_revisions_json: Mapped[str] = mapped_column(Text)
+    result_json: Mapped[str] = mapped_column(Text)
+    recorded_by: Mapped[str] = mapped_column(String(100))
 
 
 class CycleInvestigation(Base):
