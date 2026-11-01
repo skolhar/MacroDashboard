@@ -10,7 +10,7 @@ This branch adds a separate, provider-neutral **market-data foundation** for dai
 | --- | --- |
 | Bundled demo | Deterministic **synthetic** observations, labelled DEMO and isolated from live mode. No bundled market quote is real. |
 | Official macro staging | U.S. Treasury 10-year is the only previously verified source-backed indicator in isolated staging. Indian source rights and release evidence remain pending. |
-| RBI WSS reserves | [Phase 5 PR #8](https://github.com/skolhar/MacroDashboard/pull/8) is open. It has an executable governed adapter but **zero actual RBI observations**; it is not merged into main. |
+| RBI WSS reserves | [Phase 5 PR #8](https://github.com/skolhar/MacroDashboard/pull/8) is merged. It has an executable governed adapter but **zero actual RBI observations**. |
 | Yahoo market research | This branch supports real, persistent daily prices in isolated development or staging when explicitly enabled. A live Nifty test ingested eight October 2026 bars into a temporary local database; a repeat inserted zero and reported eight duplicates. No Yahoo data was imported into production or the governed macro database. |
 | Public production | Market-data display and ingestion stay disabled until storage and redistribution rights are reviewed. No development PR should be deployed or merged without approval. |
 
@@ -42,7 +42,7 @@ Market bars have raw OHLC, separate adjusted close, exchange session date/timezo
 
 ## Source governance and deployment
 
-Official Indian releases still require the [two-operator archive and approval process](docs/phase3b-source-archive.md). The current main database migration head is `0004`. This branch adds `market_data_1` from `0004`; open Phase 5 PR #8 independently adds `0005` from `0004`. **Before both PRs are merged, review their order and create a single Alembic merge head or rebase the later migration.** No production migrations, secrets or infrastructure are changed here.
+Official Indian releases still require the [two-operator archive and approval process](docs/phase3b-source-archive.md). Phase 5 migration `0005` is on main. This branch adds `market_data_1` after `0005`, preserving one Alembic head. No production migrations, secrets or infrastructure are changed here.
 
 The Caddy [production profile](Caddyfile) remains a separate reviewed deployment path. Scoped operator credentials and shared database rate limiting are required in staging/production. Keep credentials out of Git and frontend bundles.
 

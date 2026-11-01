@@ -13,7 +13,7 @@ Main has FastAPI, Next.js, PostgreSQL, Alembic through `0004`, six experimental 
 | [#10](https://github.com/skolhar/MacroDashboard/pull/10) | Open, main-based; adds Nifty, MCX crude and FX `N/A` trend overview to the existing monitor. | Preserve its conservative `N/A` principle. A separate market route linked from the existing monitor will display normalized price history when available. Do not claim Yahoo WTI is MCX crude. |
 | [#11](https://github.com/skolhar/MacroDashboard/pull/11) | Open, main-based; standalone synthetic attention-first prototype. | Do not merge or copy synthetic market claims into live research. Keep the existing SmartHedge visual system. |
 | [#13](https://github.com/skolhar/MacroDashboard/pull/13) | Open, based on #11; server-side Yahoo chart fetch, price trend/anomaly heuristics and research page. No persistence, provider interface or independent runtime validation. | Reuse the symbol candidates and explicit unavailable/futures caveats. Keep its price-only heuristics out of this foundation; retrieval and persistence belong in the backend. Its direct Next.js Yahoo fetch would duplicate and bypass the provider-neutral layer. |
-| [#8](https://github.com/skolhar/MacroDashboard/pull/8) | Open Phase 5 RBI WSS work, main-based; migration revision `0005`. | This assignment branches from current main, not #8. Use a distinct Alembic revision ID. If both PRs merge, add a reviewed merge migration or rebase the later PR so the chain has one head. Do not merge either PR automatically. |
+| [#8](https://github.com/skolhar/MacroDashboard/pull/8) | Phase 5 RBI WSS work, merged after the initial audit; migration revision `0005`. | The market-data migration was reconciled to follow `0005`, preserving one Alembic head. |
 
 ## Gaps and design
 

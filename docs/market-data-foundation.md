@@ -42,7 +42,7 @@ Yahoo symbol availability is not permission to store or redistribute quotes. [yf
 
 ## Migration and PR order
 
-This branch starts from current main migration `0004` and adds independent revision `market_data_1`. Open Phase 5 PR #8 separately adds `0005` from `0004`. Merging both without a migration reconciliation would create two Alembic heads. Review PR order, then rebase the later migration onto the first or add a small explicit Alembic merge revision. Neither PR is merged by this assignment.
+Phase 5 PR #8 is merged into main with migration `0005` after `0004`. This branch adds `market_data_1` after `0005`, yielding one Alembic head. No production migration was run during integration.
 
 ## Validation (1 November 2026)
 
