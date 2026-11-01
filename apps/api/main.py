@@ -14,7 +14,7 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from packages.domain.config import registry, rules
-from packages.domain.models import Observation, AlertTransition, IngestionRun, AdminAudit, SourceReleaseReview, RBIReserveComponent, ResearchEvidence, ResearchInterpretation, CycleAssessmentSnapshot, CycleInvestigation
+from packages.domain.models import Observation, AlertTransition, IngestionRun, AdminAudit, SourceReleaseReview, RBIReserveComponent, ResearchEvidence, ResearchInterpretation, CycleAssessmentSnapshot, CycleInvestigation, DiscoverySnapshot, DiscoveryHypothesis
 from packages.domain.store import engine, observations_at
 from packages.domain.settings import settings
 from packages.domain.security import RateLimiter, DatabaseRateLimiter, RateLimitStoreUnavailable, require_scope, client_identity, authorize_token
@@ -34,6 +34,7 @@ from packages.market.yahoo import MarketSourceUnavailable
 from packages.market.providers import provider_for
 from packages.market.operations import history_at as market_history_at, status_at as market_status_at, refresh as refresh_market
 from packages.scoring.cycle_intelligence import catalog as mechanism_catalog, evaluate as evaluate_cycles, persist_assessment, replay_snapshot
+from packages.scoring.discovery import evaluate as evaluate_discovery, persist as persist_discovery, replay as replay_discovery
 
 app = FastAPI(title="India Macro Reflexivity Dashboard", version="0.2.0")
 DB = engine()
@@ -344,6 +345,100 @@ def update_investigation(investigation_id: int, payload: InvestigationStatusRequ
         item.updated_at = datetime.now(timezone.utc)
         audit_admin(session, operator["operator_id"], "research_investigation_status", "success", f"id={item.id};from={prior_status};to={item.status}")
         return {"id": item.id, "status": item.status}
+
+
+@app.get("/api/v1/research/discovery")
+def discovery_overview(as_of: str | None = None, knowledge_mode: Literal["system_known", "source_known"] = "system_known", operator=Depends(research_reader)):
+    when = parsed_as_of(as_of)
+    if when > datetime.now(timezone.utc):
+        raise HTTPException(422, "Future discovery evaluation is unavailable")
+    with Session(DB) as session:
+        result = evaluate_discovery(session, when, knowledge_mode)
+        # Current status must not leak into a historical as-of view.
+        result["investigations"] = [{"id": item.id, "candidate_key": item.candidate_key, "status": item.status, "snapshot_id": item.snapshot_id, "updated_at": item.updated_at.isoformat()} for item in session.scalars(select(DiscoveryHypothesis).where(DiscoveryHypothesis.opened_at <= when, DiscoveryHypothesis.updated_at <= when).order_by(DiscoveryHypothesis.id.desc()).limit(30))]
+        return result
+
+
+class DiscoverySnapshotRequest(BaseModel):
+    snapshot_key: str = Field(min_length=8, max_length=160)
+    as_of: datetime | None = None
+    knowledge_mode: Literal["system_known", "source_known"] = "system_known"
+
+
+@app.post("/api/v1/research/discovery/snapshots")
+def record_discovery(payload: DiscoverySnapshotRequest, operator=Depends(research_writer)):
+    now = datetime.now(timezone.utc)
+    when = payload.as_of or now
+    if when.tzinfo is None or when > now:
+        raise HTTPException(422, "Snapshot time must be timezone-aware and not in the future")
+    with Session(DB) as session:
+        try:
+            row = persist_discovery(session, when, payload.snapshot_key, operator["operator_id"], payload.knowledge_mode, now)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        audit_admin(session, operator["operator_id"], "discovery_snapshot_record", "success", f"id={row.id};mode={row.knowledge_mode};rules={row.rule_version}")
+        return {"id": row.id, "snapshot_key": row.snapshot_key, "as_of": row.as_of.isoformat(), "knowledge_mode": row.knowledge_mode, "rule_version": row.rule_version}
+
+
+@app.get("/api/v1/research/discovery/snapshots/{snapshot_id}")
+def get_discovery_snapshot(snapshot_id: int, operator=Depends(research_reader)):
+    with Session(DB) as session:
+        row = session.get(DiscoverySnapshot, snapshot_id)
+        if row is None:
+            raise HTTPException(404, "Discovery snapshot not found")
+        return replay_discovery(row)
+
+
+class DiscoveryHypothesisRequest(BaseModel):
+    snapshot_id: int = Field(gt=0)
+    candidate_key: str = Field(min_length=8, max_length=160)
+    investigation_question: str = Field(min_length=10, max_length=2000)
+
+
+@app.post("/api/v1/research/discovery/hypotheses")
+def open_discovery_hypothesis(payload: DiscoveryHypothesisRequest, operator=Depends(research_writer)):
+    with Session(DB) as session:
+        snapshot = session.get(DiscoverySnapshot, payload.snapshot_id)
+        if snapshot is None:
+            raise HTTPException(404, "Discovery snapshot not found")
+        candidate = next((item for item in json.loads(snapshot.result_json)["candidate_hypotheses"] if item["key"] == payload.candidate_key), None)
+        if candidate is None:
+            raise HTTPException(422, "Candidate absent from the frozen discovery result")
+        prior = session.scalar(select(DiscoveryHypothesis).where(DiscoveryHypothesis.snapshot_id == snapshot.id, DiscoveryHypothesis.candidate_key == payload.candidate_key).order_by(DiscoveryHypothesis.id.desc()).limit(1))
+        if prior:
+            return {"id": prior.id, "status": prior.status, "duplicate": True}
+        now = datetime.now(timezone.utc)
+        item = DiscoveryHypothesis(candidate_key=payload.candidate_key, snapshot_id=snapshot.id, hypothesis_json=json.dumps({**candidate, "investigation_question": payload.investigation_question}), status="open", opened_by=operator["operator_id"], opened_at=now, updated_at=now)
+        session.add(item)
+        session.flush()
+        audit_admin(session, operator["operator_id"], "discovery_hypothesis_open", "success", f"id={item.id};snapshot={snapshot.id};candidate={item.candidate_key}")
+        return {"id": item.id, "status": item.status, "duplicate": False, "catalog_promoted": False}
+
+
+@app.get("/api/v1/research/discovery/hypotheses/{hypothesis_id}")
+def get_discovery_hypothesis(hypothesis_id: int, operator=Depends(research_reader)):
+    with Session(DB) as session:
+        item = session.get(DiscoveryHypothesis, hypothesis_id)
+        if item is None:
+            raise HTTPException(404, "Discovery hypothesis not found")
+        return {"id": item.id, "snapshot_id": item.snapshot_id, "status": item.status, "opened_by": item.opened_by, "opened_at": item.opened_at.isoformat(), "hypothesis": json.loads(item.hypothesis_json), "catalog_promoted": False}
+
+
+class DiscoveryStatusRequest(BaseModel):
+    status: Literal["open", "investigating", "rejected", "archived"]
+
+
+@app.patch("/api/v1/research/discovery/hypotheses/{hypothesis_id}")
+def update_discovery_hypothesis(hypothesis_id: int, payload: DiscoveryStatusRequest, operator=Depends(research_writer)):
+    with Session(DB) as session:
+        item = session.get(DiscoveryHypothesis, hypothesis_id)
+        if item is None:
+            raise HTTPException(404, "Discovery hypothesis not found")
+        prior = item.status
+        item.status = payload.status
+        item.updated_at = datetime.now(timezone.utc)
+        audit_admin(session, operator["operator_id"], "discovery_hypothesis_status", "success", f"id={item.id};from={prior};to={item.status}")
+        return {"id": item.id, "status": item.status, "catalog_promoted": False}
 
 
 @app.get("/api/v1/external-liquidity")
