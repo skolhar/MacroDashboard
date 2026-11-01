@@ -260,6 +260,34 @@ class CycleAssessmentSnapshot(Base):
     recorded_by: Mapped[str] = mapped_column(String(100))
 
 
+class DiscoverySnapshot(Base):
+    """Immutable private discovery result and its exact input/rule vintages."""
+    __tablename__ = "discovery_snapshots"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    snapshot_key: Mapped[str] = mapped_column(String(160), unique=True)
+    as_of: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
+    recorded_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    knowledge_mode: Mapped[str] = mapped_column(String(20))
+    rule_version: Mapped[str] = mapped_column(String(80))
+    rules_json: Mapped[str] = mapped_column(Text)
+    input_vintages_json: Mapped[str] = mapped_column(Text)
+    result_json: Mapped[str] = mapped_column(Text)
+    recorded_by: Mapped[str] = mapped_column(String(100))
+
+
+class DiscoveryHypothesis(Base):
+    """Human-opened provisional mechanism; never part of the cycle catalog."""
+    __tablename__ = "discovery_hypotheses"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    candidate_key: Mapped[str] = mapped_column(String(160), index=True)
+    snapshot_id: Mapped[int] = mapped_column(ForeignKey("discovery_snapshots.id"))
+    hypothesis_json: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(30))
+    opened_by: Mapped[str] = mapped_column(String(100))
+    opened_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime)
+
+
 class CycleInvestigation(Base):
     __tablename__ = "cycle_investigations"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
