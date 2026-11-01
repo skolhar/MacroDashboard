@@ -4,6 +4,8 @@ SmartHedge is a FastAPI, Next.js and PostgreSQL research application for Indian 
 
 Assignment 2 adds a private [Cycle Intelligence](http://localhost:3000/intelligence) research view with six inspectable economic mechanisms, tentative state and inflection assessment, conditional 1–3 and 3–6 month outlooks, and human investigations. It uses separate exploratory evidence; no unapproved source data is promoted to verified observations. See [methodology and evidence limits](docs/assignment2-cycle-intelligence.md). Private research requires separate UI credentials and research-scoped operator tokens; it is disabled in production and demo.
 
+Assignment 3 adds [private anomaly discovery](http://localhost:3000/intelligence/discovery): cadence-aware persistence and provisional structural-break checks, configured cross-indicator research questions, retrospective source-known versus system-known reconstruction, and frozen provisional hypothesis investigations. These are statistical research leads, not established causal cycles. The six-cycle catalog is unchanged. See [discovery methodology](docs/assignment3-discovery.md).
+
 The existing application has a separate, provider-neutral **market-data foundation** for daily Nifty, USD/INR, global futures proxies and a ten-symbol NSE ETF watchlist. Yahoo/yfinance is the initial research adapter; Upstox is a future adapter slot. Market prices never enter the governed RBI/NSDL/AMFI release tables or macro scores automatically. There is no brokerage connection, options execution or order routing.
 
 ## Current data status

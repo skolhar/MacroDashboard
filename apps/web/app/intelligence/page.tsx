@@ -30,7 +30,7 @@ export default async function Intelligence({ searchParams }: { searchParams: Pro
     if (response?.ok) data = await response.json();
   }
   return <main className="container">
-    <header className="header"><div><div className="eyebrow">SMART HEDGE / PRIVATE RESEARCH</div><h1>Cycle intelligence</h1><p className="subtitle">Feedback mechanisms · potential inflections · conditional 1–6 month implications</p><Link href="/">Stress monitor →</Link></div><div className="header-right"><strong className="live-label">PRIVATE EXPLORATORY EVIDENCE</strong><span>{data?.as_of || 'No authorized assessment'}</span></div></header>
+    <header className="header"><div><div className="eyebrow">SMART HEDGE / PRIVATE RESEARCH</div><h1>Cycle intelligence</h1><p className="subtitle">Feedback mechanisms · potential inflections · conditional 1–6 month implications</p><Link href="/">Stress monitor →</Link> · <Link href="/intelligence/discovery">Persistent anomaly discovery →</Link></div><div className="header-right"><strong className="live-label">PRIVATE EXPLORATORY EVIDENCE</strong><span>{data?.as_of || 'No authorized assessment'}</span></div></header>
     {!data ? <section className="panel"><h2>Research assessment unavailable</h2><p>Private operator access or evidence is not configured for this environment. Existing verified and demonstration monitors remain available. No live macro conclusion is implied.</p></section> : <>
       <p className="caption">{data.warning} Catalog {data.catalog_version} · {data.evidence_count} research records. Observed facts and interpretations are kept separate.</p>
       <div className="section-heading"><div><div className="eyebrow">WHAT IS ACTIVE?</div><h2>Material cycle developments</h2></div></div>
