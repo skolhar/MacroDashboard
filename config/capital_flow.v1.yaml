@@ -1,0 +1,43 @@
+version: "capital-flow.v1"
+series:
+  india_fpi_equity_net_flow_inr_cr:
+    unit: inr_crore
+    frequency: daily
+    basis: net
+    source: exchange_publisher
+    attribution: "FPI category as published by the exchange; definition may change"
+  india_dii_equity_net_flow_inr_cr:
+    unit: inr_crore
+    frequency: daily
+    basis: net
+    source: exchange_publisher
+    attribution: "DII category as published by the exchange; residual bucket"
+  india_mf_equity_net_flow_inr_cr:
+    unit: inr_crore
+    frequency: monthly
+    basis: net
+    source: amfi
+  india_mf_sip_contribution_inr_cr:
+    unit: inr_crore
+    frequency: monthly
+    basis: gross
+    source: amfi
+  india_nifty50_close_level:
+    unit: index_points
+    frequency: daily
+    source: exchange
+thresholds:
+  offset_min_cr: 2500
+  persistence_sessions: 5
+  absorption_decay_ratio: 0.7
+  return_lookahead_days: 10
+  sip_return_lag_months: 3
+criteria:
+  causal_claim_requires:
+    - documented actor motivation from a public statement
+    - temporal order strictly consistent
+    - survives a holdout window
+  falsification:
+    - "if DII offset does not reproduce out-of-sample, the offset hypothesis is falsified"
+    - "if SIP contributions do not differ between rising and falling return months, the household-response hypothesis is falsified"
+limitation: "Descriptive co-occurrence only; no feedback loop, absorption capacity or allocation forecast is established by flows data alone."

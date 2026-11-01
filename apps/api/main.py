@@ -840,3 +840,69 @@ def run_ingestion(payload: IngestionRequest, operator=Depends(require_scope("ing
             session.add(job)
             audit_admin(session, operator["operator_id"], "treasury_ingestion", "failed", type(exc).__name__)
         raise HTTPException(502, "Source ingestion failed; last known data retained")
+
+
+@app.get("/api/v1/capital-flows")
+def capital_flows(as_of: str | None = None):
+    """Evidence-first capital-flow investigation snapshot.
+
+    Descriptive FPI/DII offset, persistence, SIP response and spurious
+    association checks. Returns an explicit unavailable state when no
+    attributable observations are stored; never fabricates flows.
+    """
+    from datetime import datetime as _dt, timezone as _tz
+    from packages.scoring.capital_flow_reflexivity import evaluate
+    from packages.domain.models import Observation
+    from packages.domain.store import observations_at
+
+    when = (_dt.fromisoformat(as_of) if as_of else _dt.now(_tz.utc))
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=_tz.utc)
+    series_ids = {
+        "india_fpi_equity_net_flow_inr_cr": "fpi",
+        "india_dii_equity_net_flow_inr_cr": "dii",
+        "india_mf_sip_contribution_inr_cr": "sip",
+        "india_nifty50_close_level": "returns",
+    }
+    rows = {}
+    try:
+        with Session(engine) as session:
+            for indicator_id, key in series_ids.items():
+                obs = session.scalars(
+                    select(Observation)
+                    .where(Observation.indicator_id == indicator_id)
+                    .where(Observation.period_end <= when.date())
+                    .order_by(Observation.period_end.desc())
+                    .limit(200)
+                ).all()
+                rows[key] = sorted(obs, key=lambda o: o.period_end)
+    except Exception:
+        rows = {}
+    has_flows = bool(rows.get("fpi")) and bool(rows.get("dii"))
+    if not has_flows:
+        return {
+            "as_of": when.isoformat(),
+            "state": "data_unavailable",
+            "reason": "No attributable FPI/DII flow observations stored; investigation requires actual observations from exchange or AMFI releases.",
+            "required_series": sorted(series_ids),
+            "limitation": "Descriptive co-occurrence only; flows data carries no actor motivation. No feedback loop or absorption capacity is established."
+        }
+
+    def to_record(obs, series):
+        from packages.connectors.india_capital_flows import CapitalFlowRecord
+        return CapitalFlowRecord(
+            series=series, period_end=obs.period_end, value=obs.value,
+            revision=obs.vintage_id or "v1", published_at=obs.published_at,
+            retrieved_at=obs.published_at or obs.recorded_at or when,
+            source_name=obs.provider or "unknown", source_reference=obs.source_url or "",
+            quality=obs.quality or "secondary", flow_basis="net", definition_note="stored observation",
+        )
+
+    result = evaluate(
+        [to_record(o, "india_fpi_equity_net_flow_inr_cr") for o in rows["fpi"]],
+        [to_record(o, "india_dii_equity_net_flow_inr_cr") for o in rows["dii"]],
+        [to_record(o, "india_mf_sip_contribution_inr_cr") for o in rows["sip"]],
+        [to_record(o, "india_nifty50_close_level") for o in rows["returns"]],
+        when,
+    )
+    return {"as_of": when.isoformat(), "state": "investigation_available", **result}
