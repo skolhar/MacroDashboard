@@ -60,8 +60,9 @@ class DatabaseRateLimiter:
     def __init__(self, db):
         self.db = db
 
-    def allow(self, key: str, limit: int, window_seconds: int = 60) -> bool:
-        window = int(time.time() // window_seconds * window_seconds)
+    def allow(self, key: str, limit: int, window_seconds: int = 60, now: int | None = None) -> bool:
+        current = int(time.time()) if now is None else now
+        window = current // window_seconds * window_seconds
         digest = hashlib.sha256(key.encode()).hexdigest()
         try:
             with self.db.begin() as connection:

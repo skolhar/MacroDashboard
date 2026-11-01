@@ -1,0 +1,20 @@
+version: economic-transformations-v2
+default: raw
+series:
+  wdi_private_credit_gdp: {primary: first_difference, frequency: annual, unit: percentage_points, baseline_periods: 6, persistent_periods: 3, robust_deviation: 2.5}
+  wdi_broad_money_gdp: {primary: first_difference, frequency: annual, unit: percentage_points, baseline_periods: 6, persistent_periods: 3, robust_deviation: 2.5}
+  wdi_real_gdp_growth: {primary: first_difference, frequency: annual, unit: percentage_points, baseline_periods: 6, persistent_periods: 3, robust_deviation: 2.0}
+  wdi_consumption_growth: {primary: first_difference, frequency: annual, unit: percentage_points, baseline_periods: 6, persistent_periods: 3, robust_deviation: 2.0}
+  gem_cpi_index: {primary: yoy_pct, frequency: monthly, unit: pct_yoy, baseline_periods: 24, persistent_periods: 3, robust_deviation: 2.2, base_effect_drop_pct: 10}
+  gem_iip: {primary: yoy_pct, frequency: monthly, unit: pct_yoy, baseline_periods: 24, persistent_periods: 3, robust_deviation: 2.5, base_effect_drop_pct: 10}
+  gem_fx_rate: {primary: mom_pct, frequency: monthly, unit: pct_mom, baseline_periods: 24, persistent_periods: 3, robust_deviation: 2.5}
+  gem_total_reserves: {primary: mom_pct, frequency: monthly, unit: pct_mom, baseline_periods: 24, persistent_periods: 3, robust_deviation: 2.5}
+  gem_imports: {primary: yoy_pct, frequency: monthly, unit: pct_yoy, baseline_periods: 24, persistent_periods: 3, robust_deviation: 2.5, base_effect_drop_pct: 10}
+  gem_exports: {primary: yoy_pct, frequency: monthly, unit: pct_yoy, baseline_periods: 24, persistent_periods: 3, robust_deviation: 2.5, base_effect_drop_pct: 10}
+  gem_import_cover: {primary: first_difference, frequency: monthly, unit: months_change, baseline_periods: 24, persistent_periods: 3, robust_deviation: 2.5}
+  usd_inr_yahoo: {primary: rolling_growth, frequency: business_daily, window: 20, unit: pct_20_sessions, baseline_periods: 40, persistent_periods: 5, robust_deviation: 3.0}
+  brent_front_yahoo: {primary: rolling_growth, frequency: business_daily, window: 20, unit: pct_20_sessions, baseline_periods: 40, persistent_periods: 5, robust_deviation: 3.0}
+  rbi_mirror_bank_credit_cr: {primary: yoy_pct, frequency: fortnightly, unit: pct_yoy, baseline_periods: 20, persistent_periods: 3, robust_deviation: 2.5, definition_breaks: [2023-07-01, 2025-12-15]}
+  rbi_mirror_bank_deposits_cr: {primary: yoy_pct, frequency: fortnightly, unit: pct_yoy, baseline_periods: 20, persistent_periods: 3, robust_deviation: 2.5, definition_breaks: [2023-07-01, 2025-12-15]}
+  rbi_mirror_net_injection_cr: {primary: rolling_sum, frequency: daily, window: 5, unit: inr_crore_days, baseline_periods: 30, persistent_periods: 5, robust_deviation: 3.0}
+  rbi_mirror_gross_reserves_usd_mn: {primary: first_difference, frequency: weekly, unit: usd_million_change, baseline_periods: 20, persistent_periods: 3, robust_deviation: 2.5}

@@ -32,8 +32,13 @@ test('discovery research stays private and responsive', async ({ page, request }
       await expect(page.getByRole('heading', { name: 'Persistent anomaly discovery' })).toBeVisible();
       if (process.env.RESEARCH_COVERAGE_EXPECTED === '1') {
         await expect(page.getByRole('heading', { name: 'Source coverage and usability' })).toBeVisible();
-        await expect(page.getByText('4/11 configured indicators currently usable', { exact: false })).toBeVisible();
+        await expect(page.getByText('configured indicators currently usable', { exact: false })).toBeVisible();
         await expect(page.getByText('Last GEM retrieval:', { exact: false })).toBeVisible();
+      }
+      if (process.env.ACTOR_RESEARCH_EXPECTED === '1') {
+        await expect(page.getByRole('heading', { name: 'Potential feedback loops' })).toBeVisible();
+        await expect(page.getByText('Secondary RBI mirror retrievals:', { exact: false })).toBeVisible();
+        await expect(page.getByRole('heading', { name: 'HISTORICAL ONLY' })).toBeVisible();
       }
       await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
     }

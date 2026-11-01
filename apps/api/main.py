@@ -151,7 +151,7 @@ def research_writer(x_admin_token: str | None = Header(default=None)):
 class ResearchEvidenceRequest(BaseModel):
     indicator_key: str | None = Field(default=None, min_length=3, max_length=100)
     indicator_or_claim: str = Field(min_length=3, max_length=160)
-    frequency: Literal["business_daily", "daily", "weekly", "monthly", "quarterly", "annual", "event"] = "event"
+    frequency: Literal["business_daily", "daily", "weekly", "fortnightly", "monthly", "quarterly", "annual", "event"] = "event"
     value_text: str | None = Field(default=None, min_length=1, max_length=1000)
     value_numeric: Decimal | None = None
     unit: str | None = Field(default=None, max_length=40)
@@ -415,7 +415,7 @@ def open_discovery_hypothesis(payload: DiscoveryHypothesisRequest, operator=Depe
         candidate = next((item for item in json.loads(snapshot.result_json)["candidate_hypotheses"] if item["key"] == payload.candidate_key), None)
         if candidate is None:
             raise HTTPException(422, "Candidate absent from the frozen discovery result")
-        prior = session.scalar(select(DiscoveryHypothesis).where(DiscoveryHypothesis.snapshot_id == snapshot.id, DiscoveryHypothesis.candidate_key == payload.candidate_key).order_by(DiscoveryHypothesis.id.desc()).limit(1))
+        prior = session.scalar(select(DiscoveryHypothesis).where(DiscoveryHypothesis.candidate_key == payload.candidate_key, DiscoveryHypothesis.status.in_(["open", "investigating"])).order_by(DiscoveryHypothesis.id.desc()).limit(1))
         if prior:
             return {"id": prior.id, "status": prior.status, "duplicate": True}
         now = datetime.now(timezone.utc)

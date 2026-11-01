@@ -1,0 +1,115 @@
+version: discovery-v3
+minimum_baseline_periods: 6
+persistent_periods: 3
+robust_deviation: 2.5
+break_deviation: 1.5
+momentum_change_scale: 1.0
+acceleration_change_scale: 1.0
+freshness_days:
+  business_daily: 7
+  daily: 7
+  weekly: 21
+  fortnightly: 45
+  monthly: 75
+  quarterly: 210
+  annual: 450
+  event: 90
+# Relationships are questions for investigation, not established causal links.
+# New pairs can be added without changing the six-cycle catalog or engine code.
+relationships:
+  - id: fpi_dii_offset
+    left: fpi_equity_net
+    right: dii_equity_net
+    pattern: opposing_persistence
+    left_direction: below_baseline
+    right_direction: above_baseline
+    max_lag_days: 45
+    question: Could domestic institutions absorb sustained foreign portfolio selling?
+    actors: [foreign portfolio investors, domestic institutions]
+    incentives: [global risk allocation, domestic savings allocation]
+    proposed_reinforcement: If persistent foreign sales change prices and domestic institutions adjust allocations in response, those responses could reinforce or damp the price effect; the response link is unverified.
+    balancing: Domestic buying, policy liquidity, or improving earnings could offset foreign sales.
+    channels: [equity liquidity, valuation expectations]
+    competing: [routine portfolio rebalancing, settlement timing differences, unrelated global risk changes]
+    confirm: [independent flow releases across multiple periods, evidence that prices changed subsequent allocation behavior]
+    falsify: [flows cease to diverge, observed allocation behavior has an unrelated cause]
+  - id: fx_reserves_divergence
+    left: usd_inr_yahoo
+    right: fx_gross_reserves_usd
+    pattern: same_direction
+    left_direction: above_baseline
+    right_direction: above_baseline
+    max_lag_days: 45
+    question: Why might a secondary USD/INR quote weaken while gross reserves rise?
+    actors: [currency market participants, external borrowers, central bank]
+    incentives: [hedging dollar obligations, reserve management]
+    proposed_reinforcement: If currency expectations increase dollar demand and that demand further weakens the rupee, a feedback loop may emerge; reserve changes alone cannot establish intervention.
+    balancing: Stronger external receipts or lower import demand could weaken dollar demand.
+    channels: [currency expectations, imported costs, foreign capital flows]
+    competing: [valuation effects in reserves, timing mismatch, secondary quote basis, seasonal import payments]
+    confirm: [official reference rates and reserve components, independently dated FPI and oil observations, actor-response evidence]
+    falsify: [weakness is temporary, reserve changes are valuation effects, no dollar-demand response]
+  - id: liquidity_credit_disconnect
+    left: banking_system_liquidity
+    right: bank_credit_growth
+    pattern: opposing_persistence
+    left_direction: above_baseline
+    right_direction: below_baseline
+    max_lag_days: 60
+    question: Why might banking liquidity expand while bank credit growth weakens?
+    actors: [commercial banks, borrowers, central bank]
+    incentives: [balance-sheet liquidity, loan demand, funding cost]
+    proposed_reinforcement: If weaker borrower demand restrains lending and banks retain more liquid assets, excess liquidity could persist; borrower and bank responses are not yet observed.
+    balancing: Lower rates or improved loan demand could restore credit growth.
+    channels: [credit supply, investment spending, bank margins]
+    competing: [seasonal credit demand, regulatory classification change, temporary government cash balances]
+    confirm: [comparable official liquidity and credit definitions, borrower-demand evidence, repeated bank balance-sheet releases]
+    falsify: [credit growth recovers independently, liquidity rise reflects only a reporting-definition change]
+  - id: monthly_fx_reserve_question
+    left: gem_fx_rate
+    right: gem_total_reserves
+    pattern: opposing_persistence
+    left_direction: above_baseline
+    right_direction: below_baseline
+    max_lag_days: 20
+    question: Do monthly currency depreciation and reserve-growth weakness coexist?
+    actors: [external borrowers, importers, central bank]
+    incentives: [dollar hedging, reserve management]
+    proposed_reinforcement: If depreciation expectations raise dollar demand and that demand further weakens the rupee, an actor feedback loop could exist; monthly aggregates cannot prove it.
+    balancing: External inflows or lower oil demand may restore reserves and ease currency pressure.
+    channels: [currency expectations, import costs, external funding]
+    competing: [reserve valuation effects, annual averaging, unrelated global dollar strength]
+    confirm: [dated RBI reference rates, official reserve components, independent FPI and oil observations, actor response evidence]
+    falsify: [reserve movement is valuation only, currency weakness does not alter dollar demand]
+  - id: monthly_inflation_activity_question
+    left: gem_cpi_index
+    right: gem_iip
+    pattern: opposing_persistence
+    left_direction: above_baseline
+    right_direction: below_baseline
+    max_lag_days: 20
+    question: Are CPI inflation and industrial production diverging persistently?
+    actors: [households, lenders, monetary authority]
+    incentives: [real purchasing power, financing costs]
+    proposed_reinforcement: If higher prices constrain spending and weaker sales alter pricing or wage behavior, feedback may emerge; annual coincidence alone does not show this response.
+    balancing: Lower inflation or policy easing could support real spending.
+    channels: [household demand, pricing, financing costs]
+    competing: [supply shock, base effects, industrial sector mix, statistical revisions]
+    confirm: [official monthly CPI and IIP definitions, consumption proxies, lending-rate changes, household behavior evidence]
+    falsify: [activity rebounds despite continuing inflation pressure]
+  - id: merchandise_trade_divergence
+    left: gem_imports
+    right: gem_exports
+    pattern: opposing_persistence
+    left_direction: above_baseline
+    right_direction: below_baseline
+    max_lag_days: 20
+    question: Are import-growth strength and export-growth weakness widening the external gap?
+    actors: [importers, exporters, currency-market participants]
+    incentives: [input demand, foreign sales, dollar hedging]
+    proposed_reinforcement: If a wider merchandise gap increases dollar demand and currency weakness raises import costs, feedback might emerge; trade totals do not prove currency-market behavior.
+    balancing: Slower imports or stronger exports could narrow external financing needs.
+    channels: [trade balance, dollar demand, imported inflation]
+    competing: [commodity-price changes, seasonal customs timing, exchange-rate valuation]
+    confirm: [official trade revisions, oil-volume and price decomposition, currency and capital-flow response]
+    falsify: [gap narrows without currency pressure, import increase is only valuation]

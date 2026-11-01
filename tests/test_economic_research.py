@@ -114,7 +114,7 @@ def test_coverage_reports_missing_sources_and_read_scope(db, monkeypatch):
     from packages.jobs.operators import issue
     import apps.api.main as api
     summary = coverage(db, datetime.now(UTC))
-    assert summary["summary"]["configured"] == 11
+    assert summary["summary"]["configured"] == 15
     assert summary["summary"]["available"] == 0
     assert any(x["id"] == "india_cpi_monthly" for x in summary["pending_sources"])
     monkeypatch.setattr(api, "DB", db.bind)
