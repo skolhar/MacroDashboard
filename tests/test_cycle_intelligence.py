@@ -248,8 +248,10 @@ def test_investigation_preserves_candidate_snapshot_and_status_audit(db, monkeyp
 def test_scopes_audit_and_production_gate(db, monkeypatch):
     import apps.api.main as api
     from packages.jobs.operators import issue
+    from types import SimpleNamespace
     monkeypatch.setattr(api, "DB", db.bind)
     monkeypatch.setattr(api, "DEMO", False)
+    monkeypatch.setattr(api, "LIMITER", SimpleNamespace(allow=lambda *args, **kwargs: True))
     monkeypatch.setenv("APP_ENV", "development")
     read = issue(db, "reader", {"research:read"}, 1)
     write = issue(db, "writer", {"research:write"}, 1)
