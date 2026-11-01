@@ -72,15 +72,16 @@ def test_database_rate_limit_concurrency_cleanup_and_fail_closed(tmp_path):
     engine = create_engine(f"sqlite:///{tmp_path / 'rate-test.db'}", connect_args={"timeout": 30})
     RateLimitCounter.__table__.create(engine)
     limiter = DatabaseRateLimiter(engine)
+    fixed = 1_900_000_000  # deterministic wall clock so the 60-call burst cannot straddle a window rollover
     with ThreadPoolExecutor(max_workers=8) as pool:
-        allowed = list(pool.map(lambda _: limiter.allow("concurrent-client", 20), range(60)))
+        allowed = list(pool.map(lambda _: limiter.allow("concurrent-client", 20, now=fixed), range(60)))
     assert sum(allowed) == 20
-    assert not limiter.allow("concurrent-client", 20)
-    old = int(time.time()) - 7200
+    assert not limiter.allow("concurrent-client", 20, now=fixed)
+    old = fixed - 7200
     with engine.begin() as connection:
         connection.execute(RateLimitCounter.__table__.insert().values(key="old", window_start=old, count=1))
-    assert limiter.prune(retention_seconds=3600) == 1
-    assert not limiter.allow("concurrent-client", 20)
+    assert limiter.prune(now=fixed, retention_seconds=3600) == 1
+    assert not limiter.allow("concurrent-client", 20, now=fixed)
     engine.dispose()
 
     unavailable = DatabaseRateLimiter(create_engine("sqlite://"))
@@ -88,8 +89,6 @@ def test_database_rate_limit_concurrency_cleanup_and_fail_closed(tmp_path):
         unavailable.allow("test", 1)
     with pytest.raises(RateLimitStoreUnavailable):
         unavailable.prune()
-
-
 def test_rate_load_script_cannot_target_production():
     from scripts.staging_rate_load import run
     with pytest.raises(ValueError):

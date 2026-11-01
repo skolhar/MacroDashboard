@@ -162,3 +162,116 @@ def test_historical_vintages_snapshot_and_candidate_persistence(db, monkeypatch)
     after = discovery_evaluate(db, as_of + timedelta(days=10), include_test_fixtures=True)
     assert any(item["revision"] == "v2" for item in after["actor_responses"][0]["observations"])
     assert replay_discovery(snapshot)["result"] == frozen["result"]
+
+
+def test_mixed_operation_types_sum_and_unresolved_interpretation():
+    rows, last = sequence()
+    mixed = {201: 400, 202: -150, 203: 200, 204: -100, 205: 300}
+    for row in rows:
+        if row["id"] in mixed:
+            row["value"] = Decimal(mixed[row["id"]])
+            row["source_value_text"] = str(mixed[row["id"]])
+    result = actor_evaluate(rows, datetime.combine(last, datetime.min.time(), UTC))
+    assert result["status"] == "POTENTIAL_REINFORCEMENT"
+    assert result["liquidity_interpretation"]["classification"] == "unresolved_definition"
+    assert "mixed operation types" in result["liquidity_interpretation"]["aggregation"]
+    assert "not a liquidity stock" in result["liquidity_interpretation"]["measure"]
+    operations = result["response_operations"]
+    assert [op["net_cr"] for op in operations] == [400.0, -150.0, 200.0, -100.0, 300.0]
+    assert result["observed_response_net_cr"] == sum(op["net_cr"] for op in operations) == 650.0
+    assert result["evidence_layers"]["subsequent_operations"]["observed"] is True
+    assert result["evidence_layers"]["observed_divergence"]["observed"] is True
+    assert result["evidence_layers"]["documented_motivation"]["observed"] is False
+    assert "motive is unknown" in result["explanation"]
+
+
+def test_sign_convention_injection_absorption_and_zero_are_publisher_labeled_only():
+    injection, last = sequence(response=250)
+    as_of = datetime.combine(last, datetime.min.time(), UTC)
+    positive = actor_evaluate(injection, as_of)
+    assert positive["status"] == "POTENTIAL_REINFORCEMENT"
+    assert positive["observed_response_net_cr"] == 1250.0
+    assert "net injection" in positive["explanation"]
+    absorption, last = sequence(response=-250)
+    negative = actor_evaluate(absorption, as_of)
+    assert negative["status"] == "CONTRADICTORY_EVIDENCE"
+    assert negative["observed_response_net_cr"] == -1250.0
+    assert "net absorption" in negative["explanation"]
+    assert negative["liquidity_interpretation"]["sign_convention"].startswith("Publisher label: positive means net injection")
+    zero, last = sequence(response=0)
+    zero_result = actor_evaluate(zero, as_of)
+    assert zero_result["status"] == "CONTRADICTORY_EVIDENCE"
+    assert zero_result["observed_response_net_cr"] == 0.0
+
+
+def test_missing_daily_liquidity_observations_stay_insufficient():
+    rows, last = sequence()
+    as_of = datetime.combine(last, datetime.min.time(), UTC)
+    three_days = [row for row in rows if row["series"] != LIQUIDITY or row["id"] in {201, 202, 203, 300}]
+    result = actor_evaluate(three_days, as_of)
+    assert result["status"] == "INSUFFICIENT_EVIDENCE"
+    assert result["evidence_layers"]["subsequent_operations"]["observed"] is False
+    assert any("five separately dated RBI liquidity-operation observations" in item for item in result["missing_confirmation"])
+    assert result["response_periods"] == [] and result["response_operations"] == []
+    assert result.get("observed_response_net_cr") is None
+    no_liquidity = [row for row in rows if row["series"] != LIQUIDITY]
+    absent = actor_evaluate(no_liquidity, as_of)
+    assert absent["status"] == "INSUFFICIENT_EVIDENCE"
+    assert "no independently observed RBI liquidity-operation response" in absent["explanation"]
+
+
+def test_liquidity_table_rejects_reporting_definition_changes():
+    title = "Liquidity Operations by RBI"
+    meta = {"data": {"title": title, "frequency": "Daily", "source": "statistics", "layout": "columns", "key": "financial_markets.r702_liquidity_operations_by_rbi", "row_count": 9, "loaded_at": "2026-10-31T00:00:00Z", "dbie_path": "RBI DBIE"}, "provenance": {"report_name": title, "exported_at": "2026-10-31", "period_to": "31-AUG-2026"}}
+    columns = ["row_no"] + [f"c{i}" for i in range(1, 19)]
+    rows = [[i] + [""] * 18 for i in range(1, 10)]
+    rows[3][1] = "(Rupees Crores)"
+    rows[6][18] = "Net Injection (+)/ Absorption (-) (1+3+5+7+10-2-4-6-9)"
+    rows[7][1], rows[7][18] = "Oct 1, 2026", "120"
+    rows[8][1], rows[8][18] = "Oct 2, 2026", "-80"
+    parsed = parse_table(meta, {"columns": columns, "rows": rows}, "liquidity")
+    assert [record.value for record in parsed] == [Decimal("120"), Decimal("-80")]
+    assert parsed[0].indicator_key == "rbi_mirror_net_injection_cr" and parsed[0].frequency == "daily"
+    assert "net injection" in parsed[0].definition_note and "motive is not identified" in parsed[0].definition_note
+    rows[3][1] = "US Dollar Millions"
+    with pytest.raises(ValueError, match="unit"):
+        parse_table(meta, {"columns": columns, "rows": rows}, "liquidity")
+    rows[3][1] = "(Rupees Crores)"
+    rows[6][18] = "Net Liquidity (crores)"
+    with pytest.raises(ValueError, match="definition"):
+        parse_table(meta, {"columns": columns, "rows": rows}, "liquidity")
+    rows[6][18] = "Net Injection (+)/ Absorption (-) (1+3+5+7+10-2-4-6-9)"
+    changed = dict(meta, data=dict(meta["data"], title="Renamed Liquidity Report"))
+    with pytest.raises(ValueError, match="definition changed"):
+        parse_table(changed, {"columns": columns, "rows": rows}, "liquidity")
+
+
+def test_retrospective_reconstruction_is_labelled_with_provenance_intact():
+    rows, last = sequence()
+    as_of = datetime.combine(last, datetime.min.time(), UTC)
+    assert actor_evaluate(rows, as_of)["analysis_basis"] == "system_known_research"
+    retrospective = actor_evaluate(rows, as_of + timedelta(days=400), episode_end=last)
+    assert retrospective["analysis_basis"] == "retrospective_current_vintage"
+    for item in retrospective["observations"]:
+        assert item["published_at"] is None
+        assert item["retrieved_at"] == "2025-02-15T00:00:00+00:00"
+        assert item["revision"] == "v1" and item["quality"] == "estimated"
+        assert item["source"] == "Synthetic test fixture" and item["source_reference"].startswith("https://")
+    assert actor_evaluate(rows, as_of, knowledge_mode="source_known")["analysis_basis"] == "retrospective_source_reconstruction"
+
+
+def test_false_actor_response_associations_are_not_attributed_to_the_gap():
+    rows, last = sequence()
+    as_of = datetime.combine(last, datetime.min.time(), UTC)
+    onset_rows = rows + [fact(LIQUIDITY, date(2025, 1, 3), 500, 401, "daily")]
+    between_rows = rows + [fact(LIQUIDITY, date(2025, 1, 10), 500, 402, "daily")]
+    for extra in (onset_rows, between_rows):
+        result = actor_evaluate(extra, as_of)
+        assert result["status"] == "POTENTIAL_REINFORCEMENT"
+        assert result["observed_response_net_cr"] == 500.0
+        assert all(op["period_end"] not in {"2025-01-03", "2025-01-10"} for op in result["response_operations"])
+    absorption, last = sequence(response=-250)
+    padded = absorption + [fact(LIQUIDITY, date(2025, 1, 3), 5000, 403, "daily")]
+    padded_result = actor_evaluate(padded, datetime.combine(last, datetime.min.time(), UTC))
+    assert padded_result["status"] == "CONTRADICTORY_EVIDENCE"
+    assert padded_result["observed_response_net_cr"] == -1250.0

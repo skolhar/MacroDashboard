@@ -21,6 +21,28 @@ def _add_evidence(result, rows):
             known.add(key)
 
 
+def _evidence_layers(divergence=False, operations=False, transmission=False, motivation=False, inflection=False):
+    """Separate observed facts from interpretation so no layer is presented as proven."""
+    return {
+        "observed_divergence": {"observed": divergence, "note": "Credit and deposit YoY growth from fortnightly bank reports; the funding gap is an observed accounting divergence, not actor behavior."},
+        "subsequent_operations": {"observed": operations, "note": "RBI liquidity operations separately dated after the divergence; the operation motive is not observed."},
+        "plausible_transmission": {"observed": transmission, "note": "A proposed liquidity-to-lending channel; not independently measured in the imported mirror data."},
+        "documented_motivation": {"observed": motivation, "note": "A dated RBI statement or policy document stating the operation's objective; the mirror provides none."},
+        "feedback_inflection": {"observed": inflection, "note": "Later bank reports showing the gap widen, narrow or close after operations; timing association only."},
+    }
+
+
+LIQUIDITY_INTERPRETATION = {
+    "classification": "unresolved_definition",
+    "sign_convention": "Publisher label: positive means net injection and negative means net absorption. The mirror cannot independently verify RBI's sign convention or formula.",
+    "aggregation": "The imported column is RBI's published daily net across mixed operation types; offsetting instrument-level flows are not separately imported.",
+    "measure": "The summed value is a cumulative signed net of reported daily operation flows, not a change in outstanding liquidity and not a liquidity stock.",
+    "summation": "Summing daily observations is bookkeeping over a fixed reporting window, not an economically meaningful liquidity quantity.",
+    "definition_risk": "RBI reporting-convention or definition changes could create false signals; the mirror definition was not independently validated.",
+    "causal_boundary": "Aggregate operations must not be read as an intentional RBI response to a bank funding gap without independently dated policy rationale.",
+}
+
+
 def _series(rows, key, expected_frequency):
     periods = {}
     for row in rows:
@@ -68,7 +90,7 @@ def evaluate(rows, as_of, episode_end=None, knowledge_mode="system_known"):
     config = registry()
     spec = config["mechanisms"]["credit_funding_liquidity_response"]
     reference = episode_end or as_of.date()
-    result = {"key": f"{config['version']}:credit_funding_liquidity_response:{reference}", "mechanism_id": "credit_funding_liquidity_response", "status": "INSUFFICIENT_EVIDENCE", "causal_status": "unverified_interpretation", "analysis_basis": "retrospective_current_vintage" if episode_end else "retrospective_source_reconstruction" if knowledge_mode == "source_known" else "system_known_research", "rule_version": config["version"], "thesis": spec["thesis"], "initial_disturbance": spec["initial_disturbance"], "actors": spec["actors"], "incentives": spec["incentives"], "observed_response": spec["observed_response"], "proposed_feedback": spec["proposed_feedback"], "balancing_force": spec["possible_balancing"], "transmission": spec["transmission"], "alternatives": spec["alternatives"], "confirmation_needed": spec["confirmation"], "falsification_conditions": spec["falsification"], "implications_1_3_months": "Conditional: monitor funding conditions, bank lending and the next RBI operation releases; direction unresolved.", "implications_3_6_months": "Conditional: repeated bank and borrower responses plus policy motive evidence are needed before inferring a durable cycle.", "evidence_strength": "insufficient", "persistence": "unverified", "breadth": "banking and central-bank operations only; borrowers and market transmission unobserved", "observations": [], "disturbance_periods": [], "disturbance_growth": [], "response_periods": [], "followup_periods": [], "followup_growth": [], "missing_confirmation": list(spec["confirmation"]), "explanation": "Comparable credit, deposit and liquidity observations have not established a chronological actor-response sequence."}
+    result = {"key": f"{config['version']}:credit_funding_liquidity_response:{reference}", "mechanism_id": "credit_funding_liquidity_response", "status": "INSUFFICIENT_EVIDENCE", "causal_status": "unverified_interpretation", "analysis_basis": "retrospective_current_vintage" if episode_end else "retrospective_source_reconstruction" if knowledge_mode == "source_known" else "system_known_research", "rule_version": config["version"], "thesis": spec["thesis"], "initial_disturbance": spec["initial_disturbance"], "actors": spec["actors"], "incentives": spec["incentives"], "observed_response": spec["observed_response"], "proposed_feedback": spec["proposed_feedback"], "balancing_force": spec["possible_balancing"], "transmission": spec["transmission"], "alternatives": spec["alternatives"], "confirmation_needed": spec["confirmation"], "falsification_conditions": spec["falsification"], "implications_1_3_months": "Conditional: monitor funding conditions, bank lending and the next RBI operation releases; direction unresolved.", "implications_3_6_months": "Conditional: repeated bank and borrower responses plus policy motive evidence are needed before inferring a durable cycle.", "evidence_strength": "insufficient", "persistence": "unverified", "breadth": "banking and central-bank operations only; borrowers and market transmission unobserved", "observations": [], "disturbance_periods": [], "disturbance_growth": [], "response_periods": [], "response_operations": [], "followup_periods": [], "followup_growth": [], "evidence_layers": _evidence_layers(), "liquidity_interpretation": dict(LIQUIDITY_INTERPRETATION), "missing_confirmation": list(spec["confirmation"]), "explanation": "Comparable credit, deposit and liquidity observations have not established a chronological actor-response sequence."}
     try:
         gaps = [gap for gap in _gap_history(rows) if gap["date"] <= reference]
         liquidity = _series(rows, LIQUIDITY, "daily")
@@ -109,6 +131,7 @@ def evaluate(rows, as_of, episode_end=None, knowledge_mode="system_known"):
     result["disturbance_periods"] = [onset["date"].isoformat(), second["date"].isoformat()]
     result["disturbance_growth"] = [{"period_end": gap["date"].isoformat(), "credit_yoy_pct": float(gap["credit_yoy_pct"]), "deposit_yoy_pct": float(gap["deposit_yoy_pct"]), "gap_pp": float(gap["gap_pp"])} for gap in (onset, second)]
     result["persistence"] = "two consecutive bank reporting periods after a nonpositive prior regime"
+    result["evidence_layers"]["observed_divergence"]["observed"] = True
     _add_evidence(result, (row for gap in (gaps[i - 2], gaps[i - 1], onset, second) for row in gap["evidence"]))
     result["explanation"] = "Credit YoY growth exceeded deposit YoY growth in two reporting periods after two nonpositive periods; this is a funding-gap observation, not identified borrower behavior."
     response_days = [day for day in sorted(liquidity) if second["date"] < day <= min(reference, second["date"] + timedelta(days=spec["response_window_days"]))]
@@ -118,15 +141,17 @@ def evaluate(rows, as_of, episode_end=None, knowledge_mode="system_known"):
     selected = response_days[:spec["response_days"]]
     response_total = sum((liquidity[day]["value"] for day in selected), Decimal(0))
     result["response_periods"] = [day.isoformat() for day in selected]
+    result["response_operations"] = [{"period_end": day.isoformat(), "net_cr": float(liquidity[day]["value"])} for day in selected]
     _add_evidence(result, (liquidity[day] for day in selected))
-    result["observed_response_value_cr_days"] = float(response_total)
+    result["observed_response_net_cr"] = float(response_total)
+    result["evidence_layers"]["subsequent_operations"]["observed"] = True
     if response_total <= 0:
         result["status"] = "CONTRADICTORY_EVIDENCE"
         result["evidence_strength"] = "observed counterforce; causal motive unverified"
-        result["explanation"] += " The next five reported RBI operation days sum to net absorption or zero, contradicting the proposed net-injection response; unrelated liquidity drivers remain possible."
+        result["explanation"] += " The next five reported RBI operation days sum to net absorption or zero under the publisher's sign convention, contradicting the proposed net-injection response; mixed operation types are aggregated by RBI's published net formula, unrelated liquidity drivers remain possible, and the series classification stays unresolved_definition."
     else:
         result["evidence_strength"] = "chronological co-occurrence only; RBI motive and borrower response unverified"
-        result["explanation"] += " The next five reported RBI operation days sum to net injection; the operation's motive is unknown."
+        result["explanation"] += " The next five reported RBI operation days sum to net injection under the publisher's sign convention; mixed operation types are aggregated by RBI's published net formula, the summed value is a flow total rather than a liquidity stock, and the operation's motive is unknown."
     follow = [gap for gap in gaps[i + 2:] if selected[-1] < gap["date"] <= min(reference, selected[-1] + timedelta(days=spec["followup_window_days"]))]
     if len(follow) < spec["followup_periods"]:
         result["missing_confirmation"].insert(0, "Two bank-credit and deposit reports after the observed liquidity operations")
@@ -135,6 +160,7 @@ def evaluate(rows, as_of, episode_end=None, knowledge_mode="system_known"):
     result["followup_periods"] = [gap["date"].isoformat() for gap in follow]
     result["followup_growth"] = [{"period_end": gap["date"].isoformat(), "credit_yoy_pct": float(gap["credit_yoy_pct"]), "deposit_yoy_pct": float(gap["deposit_yoy_pct"]), "gap_pp": float(gap["gap_pp"])} for gap in follow]
     _add_evidence(result, (row for gap in follow for row in gap["evidence"]))
+    result["evidence_layers"]["feedback_inflection"]["observed"] = True
     if response_total <= 0 and all(gap["gap_pp"] <= 0 for gap in follow):
         result["status"] = "EMERGING_INFLECTION"
         result["explanation"] += " The next two bank reports show the gap closed after net absorption; this is a potential balancing sequence, not proof of RBI causation."
