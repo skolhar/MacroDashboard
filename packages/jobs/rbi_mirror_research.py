@@ -1,9 +1,9 @@
-"""Import secondary RBI DBIE mirror observations into private research only."""
-import argparse
+"""Isolated private ingestion from the read-only RBI Innovation Hub DBIE mirror."""
 from datetime import date, datetime, timezone
 from hashlib import sha256
+import argparse
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 from packages.connectors.rbi_research_mirror import RBIResearchMirrorAdapter, registry
 from packages.domain.models import IngestionRun, ResearchEvidence
 from packages.domain.settings import settings
@@ -34,10 +34,17 @@ def ingest(session, table_key, adapter=None, min_date=date(2018, 1, 1)):
                 usage_basis="Private exploratory research from a public read-only secondary mirror; source-data redistribution rights unverified",
                 quality="secondary", revision_id=f"rbihub-{digest[:16]}", observation_key=key, entered_by="rbi-mirror-research-job",
             ))
-            inserted += 1
+            try:
+                with session.begin_nested():
+                    session.flush()
+                inserted += 1
+            except IntegrityError:
+                # A concurrent worker inserted the same observation first; the unique
+                # observation_key keeps a concurrent retry idempotent.
+                duplicates += 1
         session.add(IngestionRun(provider=provider, started_at=started, finished_at=datetime.now(timezone.utc), status="success" if records else "unavailable", item_count=inserted, error_code=None if records else "NoObservations"))
         session.commit()
-        return {"provider": provider, "records": len(records), "inserted": inserted, "duplicates": duplicates, "status": "success" if records else "unavailable", "original_publication_time": "unknown", "quality": "secondary_private_research"}
+        return {"provider": provider, "records": len(records), "inserted": inserted, "duplicates": duplicates, "status": "success" if records else "unavailable"}
     except Exception as exc:
         session.rollback()
         session.add(IngestionRun(provider=provider, started_at=started, finished_at=datetime.now(timezone.utc), status="failed", item_count=0, error_code=type(exc).__name__))
@@ -46,16 +53,16 @@ def ingest(session, table_key, adapter=None, min_date=date(2018, 1, 1)):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Private research import from the RBI Innovation Hub DBIE mirror")
-    parser.add_argument("--table", choices=["bank", "liquidity", "reserves", "all"], default="all")
-    parser.add_argument("--start-date", type=date.fromisoformat, default=date(2018, 1, 1))
+    parser = argparse.ArgumentParser(description="Ingest private RBI mirror research observations.")
+    parser.add_argument("--table", required=True, choices=["bank", "liquidity", "reserves"])
+    parser.add_argument("--min-date", default="2018-01-01")
     args = parser.parse_args()
-    runtime = settings()
-    if runtime.demo_mode or runtime.environment not in {"development", "staging"}:
-        raise SystemExit("RBI mirror research imports require isolated non-demo development/staging")
+    if settings().environment in {"production", "demo"}:
+        raise SystemExit("Refusing to write mirror research into a production or demo environment")
+    min_date = date.fromisoformat(args.min_date)
     with Session(engine()) as session:
-        for key in ("bank", "liquidity", "reserves") if args.table == "all" else (args.table,):
-            print(ingest(session, key, min_date=args.start_date))
+        result = ingest(session, args.table, min_date=min_date)
+        print(result)
 
 
 if __name__ == "__main__":

@@ -37,24 +37,31 @@ def sequence(response=100, follow=1.20, include_liquidity=True, initial_year=202
 def test_actor_sequence_requires_prior_regime_and_temporal_response():
     rows, last = sequence()
     result = actor_evaluate(rows, datetime.combine(last, datetime.min.time(), UTC))
-    assert result["status"] == "POTENTIAL_REINFORCEMENT"
+    assert result["status"] == "OBSERVED_FUNDING_GAP_WIDENING"
+    assert result["state_class"] == "descriptive_observation"
     assert result["causal_status"] == "unverified_interpretation"
+    assert result["operation_status"] == "publisher_defined_only"
     assert result["disturbance_periods"][-1] < result["response_periods"][0] < result["followup_periods"][0]
     assert len({(x["kind"], x["id"]) for x in result["observations"]}) == len(result["observations"])
     assert result["confirmation_needed"] and result["alternatives"]
     no_response = [r for r in rows if r["series"] != LIQUIDITY]
     assert actor_evaluate(no_response, datetime.combine(last, datetime.min.time(), UTC))["status"] == "INSUFFICIENT_EVIDENCE"
     prior = fact(LIQUIDITY, date(2024, 1, 1), 100, 999, "daily")
-    assert actor_evaluate(no_response + [prior], datetime.combine(last, datetime.min.time(), UTC))["status"] != "POTENTIAL_REINFORCEMENT"
+    stale_feed = actor_evaluate(no_response + [prior], datetime.combine(last, datetime.min.time(), UTC))
+    assert stale_feed["status"] == "STALE_EVIDENCE"
+    assert "older than its configured reporting-cadence window" in stale_feed["explanation"]
 
 
 def test_actor_counterforce_weakening_definition_and_frequency():
     rows, last = sequence(response=-100)
     result = actor_evaluate(rows, datetime.combine(last, datetime.min.time(), UTC))
-    assert result["status"] == "CONTRADICTORY_EVIDENCE"
+    assert result["status"] == "OBSERVED_FUNDING_GAP_WIDENING"
+    assert result["state_class"] == "descriptive_observation"
     assert "absorption" in result["explanation"]
     weaker, last = sequence(follow=1.05)
-    assert actor_evaluate(weaker, datetime.combine(last, datetime.min.time(), UTC))["status"] == "WEAKENING_REINFORCEMENT"
+    assert actor_evaluate(weaker, datetime.combine(last, datetime.min.time(), UTC))["status"] == "OBSERVED_FUNDING_GAP_NARROWING"
+    closed, last = sequence(follow=0.95)
+    assert actor_evaluate(closed, datetime.combine(last, datetime.min.time(), UTC))["status"] == "OBSERVED_FUNDING_GAP_CLOSED"
     wrong_frequency = [dict(row, frequency="monthly") if row["series"] == CREDIT else row for row in weaker]
     assert actor_evaluate(wrong_frequency, datetime.combine(last, datetime.min.time(), UTC))["status"] == "CONFLICTING_EVIDENCE"
     changed, last = sequence(initial_year=2024)
@@ -125,7 +132,8 @@ def test_historical_vintages_snapshot_and_candidate_persistence(db, monkeypatch)
     db.flush()
     before = discovery_evaluate(db, as_of, include_test_fixtures=True)
     actor = before["actor_responses"][0]
-    assert actor["status"] == "POTENTIAL_REINFORCEMENT"
+    assert actor["status"] == "OBSERVED_FUNDING_GAP_WIDENING"
+    assert actor["state_class"] == "descriptive_observation"
     assert actor["key"] in {candidate["key"] for candidate in before["candidate_hypotheses"]}
     snapshot = persist_discovery(db, as_of, "synthetic-actor-snapshot", "test", recorded_at=as_of + timedelta(days=2), include_test_fixtures=True)
     frozen = replay_discovery(snapshot)
@@ -172,8 +180,9 @@ def test_mixed_operation_types_sum_and_unresolved_interpretation():
             row["value"] = Decimal(mixed[row["id"]])
             row["source_value_text"] = str(mixed[row["id"]])
     result = actor_evaluate(rows, datetime.combine(last, datetime.min.time(), UTC))
-    assert result["status"] == "POTENTIAL_REINFORCEMENT"
+    assert result["status"] == "OBSERVED_FUNDING_GAP_WIDENING"
     assert result["liquidity_interpretation"]["classification"] == "unresolved_definition"
+    assert result["liquidity_interpretation"]["independently_validated"] is False
     assert "mixed operation types" in result["liquidity_interpretation"]["aggregation"]
     assert "not a liquidity stock" in result["liquidity_interpretation"]["measure"]
     operations = result["response_operations"]
@@ -189,18 +198,19 @@ def test_sign_convention_injection_absorption_and_zero_are_publisher_labeled_onl
     injection, last = sequence(response=250)
     as_of = datetime.combine(last, datetime.min.time(), UTC)
     positive = actor_evaluate(injection, as_of)
-    assert positive["status"] == "POTENTIAL_REINFORCEMENT"
+    assert positive["status"] == "OBSERVED_FUNDING_GAP_WIDENING"
     assert positive["observed_response_net_cr"] == 1250.0
     assert "net injection" in positive["explanation"]
+    assert all(op["reported_label"].startswith("publisher") for op in positive["response_operations"])
     absorption, last = sequence(response=-250)
     negative = actor_evaluate(absorption, as_of)
-    assert negative["status"] == "CONTRADICTORY_EVIDENCE"
+    assert negative["status"] == "OBSERVED_FUNDING_GAP_WIDENING"
     assert negative["observed_response_net_cr"] == -1250.0
     assert "net absorption" in negative["explanation"]
     assert negative["liquidity_interpretation"]["sign_convention"].startswith("Publisher label: positive means net injection")
     zero, last = sequence(response=0)
     zero_result = actor_evaluate(zero, as_of)
-    assert zero_result["status"] == "CONTRADICTORY_EVIDENCE"
+    assert zero_result["status"] == "OBSERVED_FUNDING_GAP_WIDENING"
     assert zero_result["observed_response_net_cr"] == 0.0
 
 
@@ -267,11 +277,88 @@ def test_false_actor_response_associations_are_not_attributed_to_the_gap():
     between_rows = rows + [fact(LIQUIDITY, date(2025, 1, 10), 500, 402, "daily")]
     for extra in (onset_rows, between_rows):
         result = actor_evaluate(extra, as_of)
-        assert result["status"] == "POTENTIAL_REINFORCEMENT"
+        assert result["status"] == "OBSERVED_FUNDING_GAP_WIDENING"
         assert result["observed_response_net_cr"] == 500.0
         assert all(op["period_end"] not in {"2025-01-03", "2025-01-10"} for op in result["response_operations"])
     absorption, last = sequence(response=-250)
     padded = absorption + [fact(LIQUIDITY, date(2025, 1, 3), 5000, 403, "daily")]
     padded_result = actor_evaluate(padded, datetime.combine(last, datetime.min.time(), UTC))
-    assert padded_result["status"] == "CONTRADICTORY_EVIDENCE"
+    assert padded_result["status"] == "OBSERVED_FUNDING_GAP_WIDENING"
     assert padded_result["observed_response_net_cr"] == -1250.0
+
+
+def test_widely_separated_operation_dates_are_not_consecutive_sessions():
+    """Five sparse reports inside the window must not read as five sessions."""
+    rows, last = sequence()
+    as_of = datetime.combine(last, datetime.min.time(), UTC)
+    # The response window opens after the SECOND positive gap period (i=53);
+    # index 52 is the onset itself. The reference horizon (last bank report)
+    # sits 29 days after the second period, so all sparse offsets stay inside it.
+    second = [r for r in rows if r["series"] == CREDIT and r["date"].isoformat() in {
+        d.isoformat() for d in [date(2023, 1, 6) + timedelta(days=14 * i) for i in range(56)]}][53]["date"]
+    sparse = [r for r in rows if r["series"] != LIQUIDITY]
+    sparse += [fact(LIQUIDITY, second + timedelta(days=offset), 100, 400 + k, "daily") for k, offset in enumerate([1, 2, 3, 4, 19])]
+    result = actor_evaluate(sparse, as_of)
+    assert result["status"] == "COVERAGE_INCOMPLETE"
+    assert result["coverage"]["operation_dates_are_consecutive_sessions"] is False
+    assert result["coverage"]["max_gap_between_operation_reports_days"] > 14
+    assert "widely spaced" in result["explanation"] or "not interpreted as consecutive operation sessions" in result["explanation"]
+
+
+def test_unverified_definition_cannot_create_confirmed_inflection():
+    """With liquidity_definition_validated false, no causal state may appear."""
+    rows, last = sequence(follow=0.95)
+    as_of = datetime.combine(last, datetime.min.time(), UTC)
+    closed = actor_evaluate(rows, as_of)
+    assert closed["status"] == "OBSERVED_FUNDING_GAP_CLOSED"
+    assert closed["state_class"] == "descriptive_observation"
+    assert closed["status"] not in {"EMERGING_INFLECTION", "POTENTIAL_REINFORCEMENT", "WEAKENING_REINFORCEMENT"}
+    assert any("definition" in item.lower() for item in closed["missing_confirmation"])
+    widening, last = sequence(follow=1.20)
+    widened = actor_evaluate(widening, as_of)
+    assert widened["status"] == "OBSERVED_FUNDING_GAP_WIDENING"
+    assert widened["state_class"] == "descriptive_observation"
+
+
+def test_persistent_divergence_alone_does_not_establish_reinforcement():
+    """A widening credit/deposit gap without observed operations stays insufficient."""
+    rows, last = sequence(follow=1.20, include_liquidity=False)
+    as_of = datetime.combine(last, datetime.min.time(), UTC)
+    result = actor_evaluate(rows, as_of)
+    assert result["status"] == "INSUFFICIENT_EVIDENCE"
+    assert result["state_class"] == "descriptive_observation"
+    assert result["status"] not in {"POTENTIAL_REINFORCEMENT", "EMERGING_INFLECTION"}
+    assert "no independently observed RBI liquidity-operation response" in result["explanation"]
+
+
+def test_conflicting_source_observations_produce_unresolved_state():
+    """Two different values for the same date must stop the evaluation."""
+    rows, last = sequence()
+    as_of = datetime.combine(last, datetime.min.time(), UTC)
+    second = rows[106]["date"]
+    conflict = rows + [fact(LIQUIDITY, second + timedelta(days=1), 999, 501, "daily")]
+    result = actor_evaluate(conflict, as_of)
+    assert result["status"] == "CONFLICTING_EVIDENCE"
+    assert "Conflicting independent observations" in result["explanation"]
+
+
+def test_historical_revisions_do_not_leak_into_earlier_assessments(db):
+    """A later revision must not alter an earlier system-known evaluation."""
+    rows, last = sequence()
+    as_of = datetime.combine(last, datetime.min.time(), UTC)
+    for row in rows:
+        db.add(ResearchEvidence(indicator_key=row["series"], indicator_or_claim="Synthetic revision fixture", frequency=row["frequency"], value_numeric=row["value"], value_text=str(row["value"]), unit="inr_crore", period_start=row["date"], period_end=row["date"], source_name="Synthetic test fixture", source_reference=row["reference"], retrieved_at=as_of - timedelta(days=1), published_at=None, reliability_note="Synthetic test value", usage_basis="Private exploratory research from a secondary mirror; source-data rights unverified", quality="estimated", revision_id="v1", observation_key=f"revision-{row['id']}", entered_by="test"))
+    db.flush()
+    before = discovery_evaluate(db, as_of, include_test_fixtures=True)
+    assert before["actor_responses"][0]["status"] == "OBSERVED_FUNDING_GAP_WIDENING"
+    revised_day = as_of.date() - timedelta(days=1)
+    db.add(ResearchEvidence(indicator_key=CREDIT, indicator_or_claim="Synthetic revision fixture", frequency="fortnightly", value_numeric=Decimal("1"), value_text="1", unit="inr_crore", period_start=revised_day, period_end=revised_day, source_name="Synthetic test fixture", source_reference="https://example.org/revised", retrieved_at=as_of + timedelta(days=10), published_at=None, reliability_note="Later revision", usage_basis="Private exploratory research from a secondary mirror; source-data rights unverified", quality="secondary", revision_id="v2", observation_key="revision-late", entered_by="test"))
+    db.flush()
+    after = discovery_evaluate(db, as_of, include_test_fixtures=True)
+    assert after["actor_responses"][0]["status"] == "OBSERVED_FUNDING_GAP_WIDENING"
+    later_as_of = as_of + timedelta(days=10)
+    later = discovery_evaluate(db, later_as_of, include_test_fixtures=True)
+    # The revision is now known and legitimately changes the later assessment;
+    # the earlier `before` and `after` results above are untouched by it.
+    assert later["actor_responses"][0]["status"] != "OBSERVED_FUNDING_GAP_WIDENING"
+    assert "MIXED_DIVERGENCE_EVIDENCE" == later["actor_responses"][0]["status"]

@@ -52,6 +52,7 @@ mechanisms:
     alternatives: [government cash balances, seasonal credit demand, merger-related level changes, RBI operations unrelated to credit]
     confirmation: [dated bank lending and deposit releases after RBI operations, RBI-stated operational objective, independent borrower-demand evidence]
     falsification: [funding gap closes before RBI action, operations are driven by unrelated cash balances, credit growth fails to respond]
+    liquidity_definition_validated: false
     response_window_days: 45
     followup_window_days: 90
     max_episode_age_days: 180
