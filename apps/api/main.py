@@ -8,14 +8,16 @@ from uuid import uuid4
 from fastapi import FastAPI, HTTPException, Query, Request, Depends, Header
 from fastapi.responses import JSONResponse, Response
 from fastapi.exceptions import RequestValidationError
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
+from typing import Literal
+from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from packages.domain.config import registry, rules
-from packages.domain.models import Observation, AlertTransition, IngestionRun, AdminAudit, SourceReleaseReview, RBIReserveComponent
+from packages.domain.models import Observation, AlertTransition, IngestionRun, AdminAudit, SourceReleaseReview, RBIReserveComponent, ResearchEvidence, CycleInvestigation
 from packages.domain.store import engine, observations_at
 from packages.domain.settings import settings
-from packages.domain.security import RateLimiter, DatabaseRateLimiter, RateLimitStoreUnavailable, require_scope, client_identity
+from packages.domain.security import RateLimiter, DatabaseRateLimiter, RateLimitStoreUnavailable, require_scope, client_identity, authorize_token
 from packages.connectors.manual import parse_manual_csv
 from packages.connectors.india_release import ReleaseManifest, parse_release_package, validate_manifest, INDICATORS
 from packages.connectors.treasury import TreasuryAdapter
@@ -31,6 +33,7 @@ from packages.market.base import instruments as market_instruments_registry
 from packages.market.yahoo import MarketSourceUnavailable
 from packages.market.providers import provider_for
 from packages.market.operations import history_at as market_history_at, status_at as market_status_at, refresh as refresh_market
+from packages.scoring.cycle_intelligence import catalog as mechanism_catalog, evaluate as evaluate_cycles
 
 app = FastAPI(title="India Macro Reflexivity Dashboard", version="0.2.0")
 DB = engine()
@@ -126,6 +129,138 @@ def sources_health(as_of: str | None = None):
 @app.get("/api/v1/dashboard")
 def get_dashboard(as_of: str | None = None, ruleset: str | None = None):
     return dashboard(as_of, ruleset)
+
+
+def private_research_operator(scope: str, x_admin_token: str | None):
+    if DEMO or settings().environment not in {"development", "staging"}:
+        raise HTTPException(403, "Private research is disabled in this environment")
+    with Session(DB) as session:
+        return authorize_token(session, x_admin_token, scope, legacy=False)
+
+
+def research_reader(x_admin_token: str | None = Header(default=None)):
+    return private_research_operator("research:read", x_admin_token)
+
+
+def research_writer(x_admin_token: str | None = Header(default=None)):
+    return private_research_operator("research:write", x_admin_token)
+
+
+class ResearchEvidenceRequest(BaseModel):
+    cycle_id: str
+    mechanism_id: str
+    indicator_or_claim: str = Field(min_length=3, max_length=160)
+    value_text: str | None = Field(default=None, min_length=1, max_length=1000)
+    value_numeric: Decimal | None = None
+    unit: str | None = Field(default=None, max_length=40)
+    period_start: date
+    period_end: date
+    source_name: str = Field(min_length=2, max_length=100)
+    source_reference: str = Field(min_length=8, max_length=1000)
+    published_at: datetime | None = None
+    reliability_note: str = Field(min_length=10, max_length=2000)
+    usage_basis: str = Field(min_length=10, max_length=1000)
+    quality: Literal["preliminary", "estimated", "secondary", "revised", "verified"]
+    stance: Literal["supports", "contradicts", "neutral"]
+    observation_key: str = Field(min_length=8, max_length=160)
+
+    @model_validator(mode="after")
+    def value_required(self):
+        if self.value_text is None and self.value_numeric is None:
+            raise ValueError("Numeric value or qualitative finding required")
+        if self.value_numeric is not None and not self.value_numeric.is_finite():
+            raise ValueError("Numeric research value must be finite")
+        return self
+
+
+@app.get("/api/v1/research/catalog")
+def research_catalog():
+    return mechanism_catalog()
+
+
+@app.get("/api/v1/research/overview")
+def research_overview(as_of: str | None = None, operator=Depends(research_reader)):
+    with Session(DB) as session:
+        result = evaluate_cycles(session, parsed_as_of(as_of))
+        result["investigations"] = [{"id": row.id, "cycle_id": row.cycle_id, "candidate_key": row.candidate_key, "status": row.status, "opened_at": row.opened_at.isoformat()} for row in session.scalars(select(CycleInvestigation).order_by(CycleInvestigation.opened_at.desc()).limit(30)).all()]
+        return result
+
+
+@app.post("/api/v1/research/evidence")
+def add_research_evidence(payload: ResearchEvidenceRequest, operator=Depends(research_writer)):
+    cfg = mechanism_catalog()["cycles"]
+    if payload.cycle_id not in cfg or payload.mechanism_id not in {m["id"] for m in cfg[payload.cycle_id]["mechanisms"]}:
+        raise HTTPException(422, "Unknown cycle mechanism")
+    now = datetime.now(timezone.utc)
+    if payload.period_start > payload.period_end or payload.period_end > now.date() or (payload.published_at and (payload.published_at.tzinfo is None or payload.published_at > now)):
+        raise HTTPException(422, "Invalid observation period or publication timestamp")
+    if not payload.source_reference.startswith("https://") or not payload.usage_basis.strip():
+        raise HTTPException(422, "Attributable HTTPS source and permitted-use basis required")
+    with Session(DB) as session:
+        prior = session.scalar(select(ResearchEvidence).where(ResearchEvidence.observation_key == payload.observation_key))
+        if prior:
+            if any(getattr(prior, key) != getattr(payload, key) for key in type(payload).model_fields if key != "observation_key"):
+                raise HTTPException(409, "Observation key already names different evidence")
+            return {"id": prior.id, "status": "duplicate"}
+        item = ResearchEvidence(**payload.model_dump(), retrieved_at=now, entered_by=operator["operator_id"])
+        session.add(item)
+        session.flush()
+        item_id = item.id
+        audit_admin(session, operator["operator_id"], "research_evidence_add", "success", f"id={item_id};cycle={payload.cycle_id};source={payload.source_name}")
+        return {"id": item_id, "status": "recorded", "retrieved_at": now.isoformat(), "tier": "private_research"}
+
+
+class InvestigationRequest(BaseModel):
+    candidate_key: str = Field(min_length=3, max_length=160)
+    initial_observation: str = Field(min_length=10, max_length=2000)
+    competing_hypotheses: list[str] = Field(min_length=1, max_length=8)
+    questions: list[str] = Field(min_length=1, max_length=12)
+    confirmation_criteria: str = Field(min_length=10, max_length=2000)
+    falsification_criteria: str = Field(min_length=10, max_length=2000)
+
+
+@app.post("/api/v1/research/investigations")
+def start_investigation(payload: InvestigationRequest, operator=Depends(research_writer)):
+    now = datetime.now(timezone.utc)
+    with Session(DB) as session:
+        assessment = evaluate_cycles(session, now)
+        candidate = next((c for c in assessment["candidates"] if c["key"] == payload.candidate_key), None)
+        if not candidate:
+            raise HTTPException(422, "Candidate is unavailable; reassess current evidence")
+        existing = session.scalar(select(CycleInvestigation).where(CycleInvestigation.candidate_key == payload.candidate_key).order_by(CycleInvestigation.id.desc()).limit(1))
+        if existing and existing.status in {"open", "monitoring"}:
+            return {"id": existing.id, "status": existing.status, "duplicate": True}
+        item = CycleInvestigation(cycle_id=candidate["cycle_id"], candidate_key=payload.candidate_key, initial_observation=payload.initial_observation, evidence_snapshot_json=json.dumps(candidate), competing_hypotheses_json=json.dumps(payload.competing_hypotheses), questions_json=json.dumps(payload.questions), confirmation_criteria=payload.confirmation_criteria, falsification_criteria=payload.falsification_criteria, status="open", opened_by=operator["operator_id"], opened_at=now, updated_at=now)
+        session.add(item)
+        session.flush()
+        item_id = item.id
+        audit_admin(session, operator["operator_id"], "research_investigation_start", "success", f"id={item_id};cycle={candidate['cycle_id']}")
+        return {"id": item_id, "status": "open", "duplicate": False}
+
+
+@app.get("/api/v1/research/investigations/{investigation_id}")
+def get_investigation(investigation_id: int, operator=Depends(research_reader)):
+    with Session(DB) as session:
+        item = session.get(CycleInvestigation, investigation_id)
+        if not item:
+            raise HTTPException(404, "Investigation not found")
+        return {"id": item.id, "cycle_id": item.cycle_id, "candidate_key": item.candidate_key, "initial_observation": item.initial_observation, "evidence_snapshot": json.loads(item.evidence_snapshot_json), "competing_hypotheses": json.loads(item.competing_hypotheses_json), "questions": json.loads(item.questions_json), "confirmation_criteria": item.confirmation_criteria, "falsification_criteria": item.falsification_criteria, "status": item.status, "opened_by": item.opened_by, "opened_at": item.opened_at.isoformat(), "updated_at": item.updated_at.isoformat()}
+
+
+class InvestigationStatusRequest(BaseModel):
+    status: Literal["open", "monitoring", "rejected", "closed"]
+
+
+@app.patch("/api/v1/research/investigations/{investigation_id}")
+def update_investigation(investigation_id: int, payload: InvestigationStatusRequest, operator=Depends(research_writer)):
+    with Session(DB) as session:
+        item = session.get(CycleInvestigation, investigation_id)
+        if not item:
+            raise HTTPException(404, "Investigation not found")
+        item.status = payload.status
+        item.updated_at = datetime.now(timezone.utc)
+        audit_admin(session, operator["operator_id"], "research_investigation_status", "success", f"id={item.id};status={item.status}")
+        return {"id": item.id, "status": item.status}
 
 
 @app.get("/api/v1/external-liquidity")

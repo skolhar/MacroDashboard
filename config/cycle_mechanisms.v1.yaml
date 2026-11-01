@@ -1,0 +1,116 @@
+version: cycle-mechanisms-v1
+cycles:
+  fx:
+    name: FX and external liquidity
+    thesis: Foreign selling and import-dollar demand can reinforce rupee pressure if expectations change financing behavior.
+    actors: [foreign investors, importers, exporters, RBI]
+    incentives: [protect foreign-currency returns, secure import dollars, manage orderly currency conditions]
+    initial_drivers: [oil import bill, capital flows, global dollar conditions]
+    mechanisms:
+      - {id: fx_flow, role: reinforcing, description: Rupee weakness raises expected FX losses, which can accelerate foreign selling and dollar demand.}
+      - {id: fx_buffer, role: balancing, description: Reserves, hedging or reduced import demand may absorb pressure without a self-reinforcing run.}
+    leading_indicators: [FPI equity and debt flows, USD/INR reference fixing, Brent, forward-market demand]
+    lagging_indicators: [gross reserves, current account, imported inflation]
+    policy_responses: [RBI liquidity operations, FX market intervention where independently evidenced]
+    market_channels: [Nifty foreign flows, USD/INR, imported energy cost, gold INR translation]
+    horizon: [1-3 months, 3-6 months]
+    alternatives: [normal managed depreciation, global dollar move, valuation effect on reserves]
+    strengthens_when: FPI selling and import-dollar demand persist alongside currency pressure.
+    weakens_when: Flows stabilize or financing buffers absorb pressure.
+    invalidated_when: Independent flows and external funding improve while currency changes remain orderly.
+    unresolved: RBI intervention cannot be inferred from gross reserve changes alone.
+  energy:
+    name: Energy and interest rates
+    thesis: Persistent imported oil costs can feed inflation expectations and discount rates, affecting demand and equity valuations.
+    actors: [oil importers, households, RBI, bond investors]
+    incentives: [secure supply, protect purchasing power, contain inflation, demand inflation compensation]
+    initial_drivers: [global oil supply and demand, rupee translation]
+    mechanisms:
+      - {id: oil_pass_through, role: reinforcing, description: Oil and FX costs can lift inflation expectations, yields and financing costs.}
+      - {id: demand_response, role: balancing, description: Weaker demand or policy response can reduce price pressure and oil consumption.}
+    leading_indicators: [Brent, USD/INR, India 10-year yield]
+    lagging_indicators: [CPI, consumption, current account]
+    policy_responses: [RBI policy rate, fuel taxation or subsidy decisions]
+    market_channels: [Nifty margins and discount rates, crude proxy, USD/INR]
+    horizon: [1-3 months, 3-6 months]
+    alternatives: [temporary supply shock, demand-led oil rise, tax changes]
+    strengthens_when: Oil, inflation expectations and yields move together persistently.
+    weakens_when: Demand or policy offsets import-cost pressure.
+    invalidated_when: Sustained oil decline and anchored inflation expectations break pass-through.
+    unresolved: Domestic fuel pass-through depends on policy and contracts.
+  flows:
+    name: Domestic market liquidity
+    thesis: Domestic savings flows can sustain equity demand and valuations until inflows and perceived returns reinforce each other in reverse.
+    actors: [retail SIP investors, mutual funds, FPIs, listed companies]
+    incentives: [long-term saving, meet redemptions, seek risk-adjusted returns, raise capital]
+    initial_drivers: [SIP contributions, FPI and DII flows, recent returns]
+    mechanisms:
+      - {id: savings_loop, role: reinforcing, description: Persistent domestic inflows support valuations and return expectations, encouraging further allocations.}
+      - {id: redemption_loop, role: balancing, description: Slowing inflows, redemptions or valuation discomfort can reduce incremental buying.}
+    leading_indicators: [SIP registrations and discontinuations, fund net flows, FPI and DII flows]
+    lagging_indicators: [mid/small-cap valuations, market breadth]
+    policy_responses: [liquidity and market conduct measures]
+    market_channels: [Nifty and mid/small-cap liquidity, equity ETFs]
+    horizon: [1-3 months, 3-6 months]
+    alternatives: [seasonal SIP changes, institutional rebalancing, share issuance]
+    strengthens_when: Net inflows and breadth persist together.
+    weakens_when: Inflows decelerate while valuations and earnings diverge.
+    invalidated_when: Broad earnings and fresh flows sustain demand despite temporary redemptions.
+    unresolved: Price gains alone do not establish new money inflows.
+  earnings:
+    name: Equity earnings and valuation
+    thesis: Optimistic earnings and valuation can mutually reinforce capital raising and expectations until downgrades alter the loop.
+    actors: [companies, analysts, investors, lenders]
+    incentives: [finance growth, update forecasts, allocate capital, protect credit quality]
+    initial_drivers: [earnings revisions, financing costs, breadth]
+    mechanisms:
+      - {id: expectations_loop, role: reinforcing, description: Earnings upgrades support valuations and financing, which can support investment and future profits.}
+      - {id: discount_rate, role: balancing, description: Higher rates, weak breadth or earnings misses can challenge valuations.}
+    leading_indicators: [earnings revisions, yields, order books]
+    lagging_indicators: [reported profits, valuations, market breadth]
+    policy_responses: [interest-rate and fiscal changes]
+    market_channels: [Nifty, equity ETFs]
+    horizon: [1-3 months, 3-6 months]
+    alternatives: [sector mix, accounting changes, temporary margin swings]
+    strengthens_when: Upgrades broaden with investment and cash flow.
+    weakens_when: Downgrades coincide with rising discount rates.
+    invalidated_when: Broad profit delivery offsets valuation pressure.
+    unresolved: Causal financing-to-profit link requires firm-level evidence.
+  it:
+    name: India IT and AI disruption
+    thesis: AI adoption may alter client demand and pricing for Indian software services, while new AI work may offset lost revenue.
+    actors: [IT services firms, global clients, employees, AI vendors]
+    incentives: [reduce client costs, defend margins, retain skills, win new projects]
+    initial_drivers: [client AI spending, IT contract pricing, software export growth]
+    mechanisms:
+      - {id: pricing_pressure, role: reinforcing, description: Automation pressure may weaken pricing and hiring, reducing capacity to invest in new offerings.}
+      - {id: ai_monetization, role: balancing, description: AI implementation demand and productivity gains may support revenue and margins.}
+    leading_indicators: [deal disclosures, pricing commentary, hiring]
+    lagging_indicators: [USD revenue, software exports, employment]
+    policy_responses: [skills and export policy]
+    market_channels: [Nifty IT earnings, software export receipts, rupee]
+    horizon: [1-3 months, 3-6 months]
+    alternatives: [global discretionary spending cycle, currency translation]
+    strengthens_when: Multiple releases show pricing pressure with weak USD revenue.
+    weakens_when: New AI contracts and exports offset legacy demand loss.
+    invalidated_when: Sustained USD revenue and margins contradict displacement.
+    unresolved: AI attribution needs company disclosures beyond aggregate revenue.
+  global:
+    name: Global AI and credit
+    thesis: Concentrated technology expectations and credit funding can reinforce risk appetite until funding conditions or capex plans shift.
+    actors: [hyperscalers, creditors, global equity investors, central banks]
+    incentives: [build compute capacity, manage credit risk, seek growth exposure, maintain stability]
+    initial_drivers: [AI capex guidance, Treasury yields, credit spreads]
+    mechanisms:
+      - {id: capex_credit, role: reinforcing, description: Growth expectations support capex and valuations, easing funding for further investment.}
+      - {id: funding_constraint, role: balancing, description: Wider spreads or lower expected returns can constrain investment and risk appetite.}
+    leading_indicators: [capex guidance, credit spreads, Treasury yields]
+    lagging_indicators: [technology revenue, Nasdaq valuation]
+    policy_responses: [central-bank liquidity and rate decisions]
+    market_channels: [global risk appetite, Nifty FPI, gold, USD/INR]
+    horizon: [1-3 months, 3-6 months]
+    alternatives: [ordinary valuation reset, cyclical rates, sector rotation]
+    strengthens_when: Capex, credit and earnings expectations reinforce one another.
+    weakens_when: Funding constraints persist despite supportive growth narratives.
+    invalidated_when: Credit and cash flows remain resilient as valuation adjusts.
+    unresolved: AI capex productivity and credit transmission remain unproven.

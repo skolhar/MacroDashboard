@@ -199,6 +199,47 @@ class MarketFetchRun(Base):
     error_code: Mapped[str | None] = mapped_column(String(80), nullable=True)
 
 
+class ResearchEvidence(Base):
+    """Private exploratory claim; never a governed or demo observation."""
+    __tablename__ = "research_evidence"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    cycle_id: Mapped[str] = mapped_column(String(40), index=True)
+    mechanism_id: Mapped[str] = mapped_column(String(80))
+    indicator_or_claim: Mapped[str] = mapped_column(String(160))
+    value_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    value_numeric: Mapped[Decimal | None] = mapped_column(Numeric(24, 8), nullable=True)
+    unit: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    period_start: Mapped[date] = mapped_column(Date)
+    period_end: Mapped[date] = mapped_column(Date)
+    source_name: Mapped[str] = mapped_column(String(100))
+    source_reference: Mapped[str] = mapped_column(Text)
+    retrieved_at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
+    published_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    reliability_note: Mapped[str] = mapped_column(Text)
+    usage_basis: Mapped[str] = mapped_column(Text)
+    quality: Mapped[str] = mapped_column(String(30))
+    stance: Mapped[str] = mapped_column(String(20))
+    observation_key: Mapped[str] = mapped_column(String(160), unique=True)
+    entered_by: Mapped[str] = mapped_column(String(100))
+
+
+class CycleInvestigation(Base):
+    __tablename__ = "cycle_investigations"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    cycle_id: Mapped[str] = mapped_column(String(40), index=True)
+    candidate_key: Mapped[str] = mapped_column(String(160))
+    initial_observation: Mapped[str] = mapped_column(Text)
+    evidence_snapshot_json: Mapped[str] = mapped_column(Text)
+    competing_hypotheses_json: Mapped[str] = mapped_column(Text)
+    questions_json: Mapped[str] = mapped_column(Text)
+    confirmation_criteria: Mapped[str] = mapped_column(Text)
+    falsification_criteria: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(30))
+    opened_by: Mapped[str] = mapped_column(String(100))
+    opened_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime)
+
+
 class AlertTransition(Base):
     __tablename__ = "alert_transitions"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
