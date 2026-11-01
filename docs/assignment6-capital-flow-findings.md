@@ -21,7 +21,7 @@ capacity or future allocation behaviour from flows data alone.
 
 - `dii_offset_fpi_selling`: opposite-sign net flows over a 5-session window, co-occurrence only.
 - `persistence_sustained` / `persistence_weakening` / `persistence_dissipated`: daily-average DII buying in the tail window vs the detection window (strictly forward-looking; no look-ahead).
-- `sip_rising_with_subsequent_returns` / `sip_falling_with_subsequent_returns`: monthly SIP co-movement against subsequent returns, lagged; not a household allocation decision.
+- `sip_rising_after_recent_returns` / `sip_falling_after_recent_returns`: monthly SIP contributions compared against derived index returns from `lag_months` earlier (returns precede contributions); not a household allocation decision. Stored index closes are levels, so month-over-month percent returns are derived from month-end closes and index points are never summed as returns.
 - `not_a_response` / `unresolved`: reported when DII is observed before FPI (order undetermined) or when no forward return window exists — these are never promoted to causal claims.
 
 ## Validation results

@@ -2,7 +2,7 @@ import './capital-flows.css';
 
 type Offset = { state: string; as_of: string; sessions?: number; fpi_net_cr?: number; dii_net_cr?: number; offset_size_cr?: number; basis?: string } | null;
 type Persistence = { state: string; persistence: string; offset_ratio?: number; as_of?: string } | null;
-type Sip = { state: string; avg_sip_cr_rising_months?: number; avg_sip_cr_falling_months?: number; months_observed?: number; basis?: string } | null;
+type Sip = { state: string; avg_sip_cr_after_rising_returns?: number; avg_sip_cr_after_falling_returns?: number; lag_months?: number; months_observed?: number; basis?: string } | null;
 type Spurious = { state: string; reason?: string; forward_return_pct?: number; caveat?: string } | null;
 type View = {
   as_of: string;
@@ -58,13 +58,14 @@ export default async function CapitalFlows({ searchParams }: { searchParams: Pro
     <Panel title="Absorption persistence" note="Whether domestic buying sustains, weakens or not_offsetting against continued foreign selling in subsequent sessions.">
       {available && data.persistence ? <p className="result">{data.persistence.state} · offset ratio {fmt(data.persistence.offset_ratio, 3)}</p> : <Unavailable reason={data.reason} />}
     </Panel>
-    <Panel title="Household SIP response" note="Monthly co-movement between SIP contributions and subsequent equity returns. Household motivation is not observed.">
+    <Panel title="Household SIP response" note="Monthly SIP contributions compared against index returns from `lag_months` earlier. Returns precede contributions, so this is co-movement only; household motivation is not observed.">
       {available && data.sip_response ? (
         <table aria-label="SIP response detail">
           <tbody>
             <tr><th>State</th><td>{data.sip_response.state}</td></tr>
-            <tr><th>Avg SIP in rising-return months</th><td>{fmt(data.sip_response.avg_sip_cr_rising_months, 0)} ₹ crore</td></tr>
-            <tr><th>Avg SIP in falling-return months</th><td>{fmt(data.sip_response.avg_sip_cr_falling_months, 0)} ₹ crore</td></tr>
+            <tr><th>Response lag (months)</th><td>{fmt(data.sip_response.lag_months, 0)}</td></tr>
+            <tr><th>Avg SIP after rising returns</th><td>{fmt(data.sip_response.avg_sip_cr_after_rising_returns, 0)} ₹ crore</td></tr>
+            <tr><th>Avg SIP after falling returns</th><td>{fmt(data.sip_response.avg_sip_cr_after_falling_returns, 0)} ₹ crore</td></tr>
             <tr><th>Months observed</th><td>{fmt(data.sip_response.months_observed, 0)}</td></tr>
           </tbody>
         </table>

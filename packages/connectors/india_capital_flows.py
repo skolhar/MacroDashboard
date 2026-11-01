@@ -15,8 +15,9 @@ DII = "india_dii_equity_net_flow_inr_cr"
 MF_NET = "india_mf_equity_net_flow_inr_cr"
 SIP = "india_mf_sip_contribution_inr_cr"
 NIFTY_CLOSE = "india_nifty50_close_level"
+DERIVED_RETURN = "india_nifty50_monthly_return_pct"
 
-UNITS = {FPI: "inr_crore", DII: "inr_crore", MF_NET: "inr_crore", SIP: "inr_crore", NIFTY_CLOSE: "index_points"}
+UNITS = {FPI: "inr_crore", DII: "inr_crore", MF_NET: "inr_crore", SIP: "inr_crore", NIFTY_CLOSE: "index_points", DERIVED_RETURN: "percent"}
 
 
 @dataclass(frozen=True)
@@ -112,4 +113,34 @@ def parse_flows(table: CapitalFlowTable, expected: dict[str, str], *, gross_rows
                 flow_basis="gross" if series in gross_rows else "net",
                 definition_note=f"Publisher-reported {series.rsplit('_', 2)[-2] if '_' in series else series}; gross rows never summed with net rows",
             ))
+    return records
+
+
+def monthly_returns_from_closes(close_records, *, series=DERIVED_RETURN):
+    """Derive month-over-month percent returns from stored month-end closes.
+
+    Index levels are points, not returns, and are never summed into a return
+    window. Only month-end closes (last observation per calendar month) are
+    used; months without a prior month-end close are skipped so no derived
+    return is ever fabricated.
+    """
+    closes_by_month = {}
+    for r in sorted(close_records, key=lambda x: x.period_end):
+        if r.series != NIFTY_CLOSE:
+            continue
+        closes_by_month[(r.period_end.year, r.period_end.month)] = r  # last close wins
+    records = []
+    for (year, month), close in sorted(closes_by_month.items()):
+        prior = (year - 1, 12) if month == 1 else (year, month - 1)
+        previous = closes_by_month.get(prior)
+        if previous is None or previous.value == 0:
+            continue
+        pct = (close.value - previous.value) / previous.value * Decimal("100")
+        records.append(CapitalFlowRecord(
+            series=series, period_end=close.period_end, value=pct,
+            revision=close.revision, published_at=close.published_at,
+            retrieved_at=close.retrieved_at, source_name=close.source_name,
+            source_reference=close.source_reference, quality="derived",
+            flow_basis="derived", definition_note="Derived month-over-month percent change of stored month-end index closes; not a publisher return series",
+        ))
     return records

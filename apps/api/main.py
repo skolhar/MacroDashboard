@@ -898,11 +898,16 @@ def capital_flows(as_of: str | None = None):
             quality=obs.quality or "secondary", flow_basis="net", definition_note="stored observation",
         )
 
+    from packages.connectors.india_capital_flows import monthly_returns_from_closes
+    # Stored index closes are levels, not returns: month-over-month percent
+    # changes are derived explicitly so scoring never sums index points.
+    close_records = [to_record(o, "india_nifty50_close_level") for o in rows["returns"]]
+    return_records = monthly_returns_from_closes(close_records)
     result = evaluate(
         [to_record(o, "india_fpi_equity_net_flow_inr_cr") for o in rows["fpi"]],
         [to_record(o, "india_dii_equity_net_flow_inr_cr") for o in rows["dii"]],
         [to_record(o, "india_mf_sip_contribution_inr_cr") for o in rows["sip"]],
-        [to_record(o, "india_nifty50_close_level") for o in rows["returns"]],
+        return_records,
         when,
     )
     return {"as_of": when.isoformat(), "state": "investigation_available", **result}

@@ -26,6 +26,11 @@ series:
     unit: index_points
     frequency: daily
     source: exchange
+  india_nifty50_monthly_return_pct:
+    unit: percent
+    frequency: monthly
+    source: derived
+    derivation: "Month-over-month percent change of stored month-end india_nifty50_close_level closes; not a publisher return series"
 thresholds:
   offset_min_cr: 2500
   persistence_sessions: 5

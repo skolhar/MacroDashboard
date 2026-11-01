@@ -81,40 +81,48 @@ def persistence(rows_fpi, rows_dii, day, *, sessions=3, horizon=PERSISTENCE_SESS
     return {"state": f"persistence_{verdict}", "persistence": verdict, "offset_ratio": round(float(ratio), 3), "as_of": day.isoformat()}
 
 
-def sip_response(rows_sip, rows_returns, as_of, *, lag_months=SIP_RETURN_LAG_MONTHS):
-    """Whether household SIP contributions changed after sustained returns.
+def _shift_month(year, month, delta):
+    total = year * 12 + (month - 1) + delta
+    return total // 12, total % 12 + 1
 
-    Monthly SIP series shifted by `lag_months` against subsequent market
-    returns. Co-movement only; household motivation is not observed.
+
+def sip_response(rows_sip, rows_returns, as_of, *, lag_months=SIP_RETURN_LAG_MONTHS):
+    """Whether household SIP contributions differ after rising vs falling returns.
+
+    SIP contribution in month M is compared against equity returns from
+    month M - `lag_months`: returns precede contributions by the configured
+    response lag, so a co-movement is at best a lagged response, never a
+    contemporaneous causal link. Months without a lagged return observation
+    are skipped. Household motivation is not observed.
     """
     if len(rows_sip) < 4 or not rows_returns:
         return None
     returns_by_month = {}
     for r in rows_returns:
-        key = (r.period_end.year, r.period_end.month)
-        returns_by_month[key] = r.value
+        returns_by_month[(r.period_end.year, r.period_end.month)] = r.value
     comparisons = []
-    for i, sip in enumerate(rows_sip[:-1]):
-        month = (sip.period_end.year, sip.period_end.month)
-        later = returns_by_month.get(month)
-        if later is None:
+    for sip in rows_sip:
+        prior_y, prior_m = _shift_month(sip.period_end.year, sip.period_end.month, -lag_months)
+        prior_return = returns_by_month.get((prior_y, prior_m))
+        if prior_return is None:
             continue
-        comparisons.append((sip.value, later))
+        comparisons.append((sip.value, prior_return))
     if len(comparisons) < 3:
         return None
-    rising_returns = [c for c in comparisons if c[1] > 0]
-    falling_returns = [c for c in comparisons if c[1] < 0]
-    avg_sip_up = sum(c[0] for c in rising_returns) / len(rising_returns) if rising_returns else None
-    avg_sip_down = sum(c[0] for c in falling_returns) / len(falling_returns) if falling_returns else None
-    if avg_sip_up is None or avg_sip_down is None:
+    rising = [c for c in comparisons if c[1] > 0]
+    falling = [c for c in comparisons if c[1] < 0]
+    if not rising or not falling:
         return None
+    avg_sip_up = sum(c[0] for c in rising) / len(rising)
+    avg_sip_down = sum(c[0] for c in falling) / len(falling)
     direction = "rising" if avg_sip_up > avg_sip_down else "falling" if avg_sip_up < avg_sip_down else "flat"
     return {
-        "state": f"sip_{direction}_with_subsequent_returns",
-        "avg_sip_cr_rising_months": float(avg_sip_up),
-        "avg_sip_cr_falling_months": float(avg_sip_down),
+        "state": f"sip_{direction}_after_recent_returns",
+        "avg_sip_cr_after_rising_returns": float(avg_sip_up),
+        "avg_sip_cr_after_falling_returns": float(avg_sip_down),
+        "lag_months": lag_months,
         "months_observed": len(comparisons),
-        "basis": "monthly co-movement, not a household allocation decision",
+        "basis": "SIP level after lagged returns; returns precede contributions, co-movement only",
         "as_of": as_of.isoformat(),
     }
 

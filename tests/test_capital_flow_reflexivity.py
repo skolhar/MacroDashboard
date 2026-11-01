@@ -4,6 +4,7 @@ from decimal import Decimal
 import pytest
 from packages.connectors.india_capital_flows import (
     CapitalFlowRecord, CapitalFlowTable, DII, FPI, NIFTY_CLOSE, SIP, parse_flows,
+    monthly_returns_from_closes,
 )
 from packages.scoring.capital_flow_reflexivity import (
     evaluate, offset, persistence, sip_response, spurious_association_check,
@@ -65,16 +66,33 @@ def test_persistence_insufficient_history():
     assert result["persistence"] == "insufficient_history"
 
 
-def test_sip_response_rising_with_returns():
-    sip = [flow(SIP, date(2026, 1, 31), 10000), flow(SIP, date(2026, 2, 28), 9000),
-           flow(SIP, date(2026, 3, 31), 11000), flow(SIP, date(2026, 4, 30), 12000)]
-    returns = [flow("india_nifty50_monthly_return", date(2026, 1, 31), 5),
-               flow("india_nifty50_monthly_return", date(2026, 2, 28), -2),
-               flow("india_nifty50_monthly_return", date(2026, 3, 31), 3),
-               flow("india_nifty50_monthly_return", date(2026, 4, 30), -1)]
+def test_sip_response_uses_lagged_returns_and_names_lag():
+    sip = [flow(SIP, date(2026, 1, 31), 10000), flow(SIP, date(2026, 2, 28), 11000),
+           flow(SIP, date(2026, 3, 31), 12000), flow(SIP, date(2026, 4, 30), 13000)]
+    # lag_months=3: SIP in month M pairs with the return from month M-3.
+    returns = [flow("india_nifty50_monthly_return_pct", date(2025, 10, 31), 5),
+               flow("india_nifty50_monthly_return_pct", date(2025, 11, 30), -2),
+               flow("india_nifty50_monthly_return_pct", date(2025, 12, 31), 3),
+               flow("india_nifty50_monthly_return_pct", date(2026, 1, 31), -1)]
     result = sip_response(sip, returns, NOW)
     assert result is not None
-    assert result["state"] == "sip_rising_with_subsequent_returns"
+    assert result["state"] == "sip_falling_after_recent_returns"
+    assert result["lag_months"] == 3
+
+
+def test_monthly_returns_derived_from_month_end_closes():
+    closes = [flow(NIFTY_CLOSE, date(2026, 1, 30), 10000), flow(NIFTY_CLOSE, date(2026, 2, 27), 10200),
+              flow(NIFTY_CLOSE, date(2026, 2, 28), 10100)]
+    returns = monthly_returns_from_closes(closes)
+    assert len(returns) == 1
+    assert returns[0].period_end == date(2026, 2, 28)
+    assert returns[0].value == Decimal("1")
+    assert returns[0].quality == "derived"
+
+
+def test_monthly_returns_skip_months_without_prior_close():
+    closes = [flow(NIFTY_CLOSE, date(2026, 1, 30), 10000)]
+    assert monthly_returns_from_closes(closes) == []
 
 
 def test_spurious_association_flags_missing_session_pairing():
