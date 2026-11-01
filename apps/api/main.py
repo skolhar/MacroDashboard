@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import json
 import os
 import base64
@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from packages.domain.config import registry, rules
-from packages.domain.models import Observation, AlertTransition, IngestionRun, AdminAudit, SourceReleaseReview
+from packages.domain.models import Observation, AlertTransition, IngestionRun, AdminAudit, SourceReleaseReview, RBIReserveComponent
 from packages.domain.store import engine, observations_at
 from packages.domain.settings import settings
 from packages.domain.security import RateLimiter, DatabaseRateLimiter, RateLimitStoreUnavailable, require_scope, client_identity
@@ -20,7 +20,8 @@ from packages.connectors.manual import parse_manual_csv
 from packages.connectors.india_release import ReleaseManifest, parse_release_package, validate_manifest, INDICATORS
 from packages.connectors.treasury import TreasuryAdapter
 from packages.jobs.ingest import ingest_records
-from packages.jobs.source_archive import MAX_BYTES as SOURCE_ARCHIVE_MAX_BYTES, archive_original, read_original
+from packages.jobs.source_archive import max_bytes as source_archive_max_bytes, archive_original, read_original
+from packages.connectors.rbi_wss import parse_rbi_wss_reserves
 from packages.scoring.engine import compute
 from packages.scoring.alerts import fx_alert
 from packages.scoring.engine_v2 import compute_v2
@@ -50,7 +51,8 @@ async def request_id(request: Request, call_next):
         body_length = int(request.headers.get("content-length", "0") or 0)
     except ValueError:
         return JSONResponse(status_code=400, content={"error": {"code": 400, "message": "Invalid Content-Length"}})
-    if request.method != "GET" and body_length > 1_000_000:
+    max_body = source_archive_max_bytes() * 2 + 2_000_000 if request.url.path == "/api/v1/admin/imports/release" else source_archive_max_bytes() if request.url.path == "/api/v1/admin/releases/archive" else 1_000_000
+    if request.method != "GET" and body_length > max_body:
         return JSONResponse(status_code=413, content={"error": {"code": 413, "message": "Request too large"}})
     response = await call_next(request)
     response.headers["X-Request-ID"] = request.headers.get("X-Request-ID", str(uuid4()))
@@ -124,7 +126,23 @@ def get_dashboard(as_of: str | None = None, ruleset: str | None = None):
 
 @app.get("/api/v1/external-liquidity")
 def external_liquidity(as_of: str | None = None):
-    return external_liquidity_view(dashboard(as_of, "v2"))
+    result = external_liquidity_view(dashboard(as_of, "v2"))
+    with Session(DB) as session:
+        rows = observations_at(session, "fx_gross_reserves_usd", parsed_as_of(as_of), "system_known", DEMO)
+        latest = rows[-1] if rows else None
+        previous = rows[-2] if len(rows) > 1 else None
+        components = session.get(RBIReserveComponent, latest.id) if latest else None
+        review = session.get(SourceReleaseReview, latest.release_review_id) if latest and latest.release_review_id else None
+        first_friday = date(2018, 1, 5)
+        known_weeks = {row.period_end for row in rows}
+        cutoff = min(parsed_as_of(as_of).date(), latest.period_end if latest else parsed_as_of(as_of).date())
+        missing_fridays = 0
+        day = first_friday
+        while day <= cutoff:
+            missing_fridays += day not in known_weeks
+            day += timedelta(days=7)
+        result["rbi_reserves"] = {"reference_week": latest.period_end.isoformat(), "published_at": latest.published_at.isoformat(), "gross_usd_mn": float(components.total_usd_mn), "change_usd_mn": float((latest.value - previous.value) * 1000) if previous else None, "quality": latest.quality, "source_url": latest.source_reference, "vintage_id": latest.vintage_id, "release_review_id": review.id if review else None, "reviewed_by": review.approved_by if review else None, "missing_expected_fridays_since_2018": missing_fridays, "components_usd_mn": {key: float(getattr(components, key)) for key in ("foreign_currency_assets_usd_mn", "gold_usd_mn", "sdr_usd_mn", "imf_reserve_tranche_usd_mn")}} if components else None
+    return result
 
 
 @app.get("/api/v1/indicators")
@@ -289,7 +307,7 @@ async def upload_release_original(request: Request, x_source_provider: str = Hea
         raise HTTPException(415, "Original publisher file content type required")
     raw = bytearray()
     async for chunk in request.stream():
-        if len(raw) + len(chunk) > SOURCE_ARCHIVE_MAX_BYTES:
+        if len(raw) + len(chunk) > source_archive_max_bytes():
             raise HTTPException(413, "Original publisher file exceeds archive limit")
         raw.extend(chunk)
     try:
@@ -382,12 +400,17 @@ def import_release(payload: ReleasePackageRequest, operator=Depends(require_scop
     try:
         original = base64.b64decode(payload.original_source_base64, validate=True)
         extract = base64.b64decode(payload.extract_csv_base64, validate=True)
-        if not original or len(original) > 750_000 or len(extract) > 750_000:
-            raise ValueError("Source and extract must be nonempty and at most 750 KB each")
+        if not original or len(original) > source_archive_max_bytes() or not extract or len(extract) > 1_000_000:
+            raise ValueError("Source or extract exceeds configured limit")
         if hashlib.sha256(original).hexdigest() != payload.source_sha256:
             raise ValueError("Original source hash mismatch")
         manifest = ReleaseManifest(**payload.model_dump(exclude={"review_id", "original_source_base64", "extract_csv_base64"}))
         records = parse_release_package(extract, manifest)
+        reserve_release = None
+        if any(record.indicator_id == "fx_gross_reserves_usd" for record in records):
+            reserve_release = parse_rbi_wss_reserves(original, manifest)
+            if len(records) != 1 or records[0].period_start != reserve_release.reference_week or records[0].period_end != reserve_release.reference_week or records[0].value != reserve_release.total_usd_bn:
+                raise ValueError("Reviewed extract does not match original WSS reference week or gross USD-million total")
         with Session(DB) as session:
             review = session.get(SourceReleaseReview, payload.review_id)
             if review is None or review.status != "approved":
@@ -396,7 +419,7 @@ def import_release(payload: ReleasePackageRequest, operator=Depends(require_scop
                 raise ValueError("Original package differs from controlled source archive")
             if (review.provider, review.source_reference, review.publication_evidence_url, review.published_at, review.source_sha256, review.extract_sha256, review.entitlement_basis, review.definition_version) != (payload.provider, payload.source_reference, payload.publication_evidence_url, payload.published_at, payload.source_sha256, hashlib.sha256(extract).hexdigest(), payload.redistribution_basis, payload.definition_version):
                 raise ValueError("Package does not match approved release review")
-            outcome = ingest_records(session, records, extract, payload.provider, original_raw=original, release_review_id=review.id)
+            outcome = ingest_records(session, records, extract, payload.provider, original_raw=original, release_review_id=review.id, reserve_release=reserve_release)
             if outcome["inserted"]:
                 persist_transitions(session, evaluate_v2(session, datetime.now(timezone.utc)), datetime.now(timezone.utc))
             audit_admin(session, operator["operator_id"], "release_import", "success", f"provider={payload.provider};run_id={outcome['run_id']};inserted={outcome['inserted']};source_sha256={outcome['snapshot_sha256']};definition={payload.definition_version};publication_evidence={payload.publication_evidence_url};rights={payload.redistribution_basis}")

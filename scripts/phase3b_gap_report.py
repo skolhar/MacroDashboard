@@ -61,6 +61,17 @@ def coverage(session: Session, as_of: datetime) -> dict:
             "vintages": [{"period_end": row.period_end.isoformat(), "vintage_id": row.vintage_id, "published_at": row.published_at.isoformat(), "ingested_at": row.ingested_at.isoformat(), "release_review_id": row.release_review_id, "quality": row.quality} for row in raw],
             "unreviewed_vintage_periods": sorted({row.period_end.isoformat() for row in raw if row.release_review_id is None}),
         }
+        if indicator == "fx_gross_reserves_usd":
+            # Friday is the expected reference-week anchor; RBI publication
+            # holidays and historical definitions still require human review.
+            friday = START + timedelta(days=(4 - START.weekday()) % 7)
+            missing_weeks = []
+            while friday <= end:
+                if friday not in system_periods:
+                    missing_weeks.append(friday.isoformat())
+                friday += timedelta(days=7)
+            output[indicator]["missing_expected_friday_weeks_system_known"] = missing_weeks
+            output[indicator]["weekly_gap_caveat"] = "Expected Friday anchors only; holidays, alternate reference days and original vintages require review"
     return {"as_of": as_of.isoformat(), "start": START.isoformat(), "calendar_policy": "Exact missing business dates only for independently verified India calendar years; historical years without a reviewed calendar remain unknown", "indicators": output}
 
 

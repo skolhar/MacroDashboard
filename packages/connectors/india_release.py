@@ -16,7 +16,7 @@ from .base import SourceObservation
 
 FIELDS = {"indicator_id", "value", "unit", "period_start", "period_end", "vintage_id", "quality"}
 PROVIDERS = {
-    "rbi": ("rbi.org.in", "www.rbi.org.in", "statistics.rbi.org.in", "data.rbi.org.in", "wss.rbi.org.in"),
+    "rbi": ("rbi.org.in", "www.rbi.org.in", "statistics.rbi.org.in", "data.rbi.org.in", "wss.rbi.org.in", "rbidocs.rbi.org.in"),
     "fbil": ("fbil.org.in", "www.fbil.org.in"),
     "nsdl": ("nsdl.co.in", "fpi.nsdl.co.in", "pilot.fpi.nsdl.co.in"),
     "amfi": ("amfiindia.com", "www.amfiindia.com"),

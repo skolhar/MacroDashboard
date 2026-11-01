@@ -86,6 +86,7 @@ def test_release_api_requires_scoped_operator_and_original_hash(db, monkeypatch,
     monkeypatch.setenv("DEMO_MODE", "false")
     monkeypatch.setenv("OPERATOR_AUTH_MODE", "db")
     monkeypatch.setenv("SOURCE_ARCHIVE_ROOT", str(tmp_path / "originals"))
+    monkeypatch.setenv("SOURCE_ARCHIVE_MAX_BYTES", "750000")
     monkeypatch.setattr(api, "DB", db.bind)
     monkeypatch.setattr(api, "DEMO", False)
     monkeypatch.setattr(api, "LIMITER", SimpleNamespace(allow=lambda *args: True))

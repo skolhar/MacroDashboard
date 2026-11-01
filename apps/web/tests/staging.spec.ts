@@ -26,5 +26,8 @@ test('external liquidity staging keeps Indian gaps and reference-rate basis expl
   await expect(page.getByText('INSUFFICIENT EVIDENCE')).toBeVisible();
   await expect(page.getByText('RBI (through 9 July 2018) and FBIL (from 10 July 2018) publish reference fixings; neither is a continuous tradable quote.')).toBeVisible();
   await expect(page.getByText('No source-backed observation.').first()).toBeVisible();
+  await expect(page.getByText('RBI WEEKLY GROSS RESERVES')).toBeVisible();
+  await expect(page.getByText('DATA UNAVAILABLE · no approved RBI WSS reserves release has been imported.')).toBeVisible();
+  await expect(page.getByText('INSUFFICIENT EVIDENCE')).toBeVisible();
   await expect(page.getByText('USD/INR published FBIL reference rate')).toHaveCount(0);
 });
