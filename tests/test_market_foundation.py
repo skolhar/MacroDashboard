@@ -128,7 +128,9 @@ def test_failures_staleness_gaps_and_production_gate(db, monkeypatch):
         def fetch_daily(self, *args): raise MarketSourceUnavailable("synthetic unavailable")
     with pytest.raises(MarketSourceUnavailable):
         refresh(db, Failing(), spec, date(2026, 10, 20), date(2026, 11, 1), NOW)
-    assert status_at(db, spec, "yahoo", NOW)["status"] == "SOURCE_FAILED"
+    # The failed run is recorded at wall-clock completion, which can be later
+    # than this fixed historical fixture instant. Query after that completion.
+    assert status_at(db, spec, "yahoo", NOW + timedelta(days=1))["status"] == "SOURCE_FAILED"
     assert db.scalar(select(MarketFetchRun).where(MarketFetchRun.instrument_id == spec.id)).error_code == "MarketSourceUnavailable"
     batch = MarketBatch(spec, "yahoo", "^NSEI", NOW, "https://finance.yahoo.com/quote/%5ENSEI/history/", (MarketCandle(date(2026, 10, 23), Decimal("100"), Decimal("102"), Decimal("99"), Decimal("101"), None, 100), MarketCandle(date(2026, 10, 29), Decimal("102"), Decimal("104"), Decimal("101"), Decimal("103"), None, 100)), "Asia/Kolkata")
     assert ingest_batch(db, batch)["inserted"] == 2

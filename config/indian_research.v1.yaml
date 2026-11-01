@@ -1,0 +1,19 @@
+version: indian-research-v1
+source: world_bank_wdi
+country: IND
+source_id: 2
+terms: https://data.worldbank.org/summary-terms-of-use
+indicators:
+  wdi_private_credit_gdp: {code: FS.AST.PRVT.GD.ZS, name: Domestic credit to private sector, sector: banking, unit: pct_gdp, frequency: annual, primary: first_difference, anomaly_deviation: 2.5}
+  wdi_broad_money_gdp: {code: FM.LBL.BMNY.GD.ZS, name: Broad money, sector: banking, unit: pct_gdp, frequency: annual, primary: first_difference, anomaly_deviation: 2.5}
+  wdi_real_gdp_growth: {code: NY.GDP.MKTP.KD.ZG, name: Real GDP growth, sector: activity, unit: pct_yoy, frequency: annual, primary: first_difference, anomaly_deviation: 2.0}
+  wdi_consumption_growth: {code: NE.CON.PRVT.KD.ZG, name: Household consumption growth, sector: activity, unit: pct_yoy, frequency: annual, primary: first_difference, anomaly_deviation: 2.0}
+gem_source_id: 15
+gem_indicators:
+  gem_cpi_index: {code: CPTOTNSXN, name: Consumer price index, sector: inflation, unit: index_provider_basis, frequency: monthly, primary: yoy_pct, anomaly_deviation: 2.2}
+  gem_iip: {code: IPTOTNSKD, name: Industrial production constant US dollars, sector: activity, unit: usd_constant_provider_basis, frequency: monthly, primary: yoy_pct, anomaly_deviation: 2.5}
+  gem_fx_rate: {code: DPANUSLCU, name: Official exchange rate monthly average, sector: external, unit: inr_per_usd, frequency: monthly, primary: mom_pct, anomaly_deviation: 2.5}
+  gem_total_reserves: {code: TOTRESV, name: Total foreign reserves, sector: external, unit: source_units_unverified, frequency: monthly, primary: mom_pct, anomaly_deviation: 2.5}
+  gem_imports: {code: DMGSRMRCHNSCD, name: Merchandise imports customs current USD millions, sector: external, unit: usd_millions, frequency: monthly, primary: yoy_pct, anomaly_deviation: 2.5}
+  gem_exports: {code: DXGSRMRCHNSCD, name: Merchandise exports customs current USD millions, sector: external, unit: usd_millions, frequency: monthly, primary: yoy_pct, anomaly_deviation: 2.5}
+  gem_import_cover: {code: IMPCOV, name: Foreign reserves goods-import cover, sector: external, unit: months, frequency: monthly, primary: first_difference, anomaly_deviation: 2.5}

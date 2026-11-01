@@ -6,6 +6,8 @@ Assignment 2 adds a private [Cycle Intelligence](http://localhost:3000/intellige
 
 Assignment 3 adds [private anomaly discovery](http://localhost:3000/intelligence/discovery): cadence-aware persistence and provisional structural-break checks, configured cross-indicator research questions, retrospective source-known versus system-known reconstruction, and frozen provisional hypothesis investigations. These are statistical research leads, not established causal cycles. The six-cycle catalog is unchanged. See [discovery methodology](docs/assignment3-discovery.md).
 
+Assignment 4 extends that private view with a focused 11-indicator Indian research registry, actual World Bank WDI/GEM annual and monthly acquisition, versioned economic transformations, explicit stale/missing coverage, and retrospective episode analysis. It has **no live reflexivity-cycle claim**: the actual-source demonstration found single-series patterns but no confirmed cross-indicator feedback candidate. See the [methodology](docs/assignment4-indian-macro.md) and [real-data report](docs/assignment4-real-data-report.md).
+
 The existing application has a separate, provider-neutral **market-data foundation** for daily Nifty, USD/INR, global futures proxies and a ten-symbol NSE ETF watchlist. Yahoo/yfinance is the initial research adapter; Upstox is a future adapter slot. Market prices never enter the governed RBI/NSDL/AMFI release tables or macro scores automatically. There is no brokerage connection, options execution or order routing.
 
 ## Current data status

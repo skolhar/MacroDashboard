@@ -35,6 +35,7 @@ from packages.market.providers import provider_for
 from packages.market.operations import history_at as market_history_at, status_at as market_status_at, refresh as refresh_market
 from packages.scoring.cycle_intelligence import catalog as mechanism_catalog, evaluate as evaluate_cycles, persist_assessment, replay_snapshot
 from packages.scoring.discovery import evaluate as evaluate_discovery, persist as persist_discovery, replay as replay_discovery
+from packages.scoring.economic_coverage import coverage as economic_coverage
 
 app = FastAPI(title="India Macro Reflexivity Dashboard", version="0.2.0")
 DB = engine()
@@ -348,32 +349,42 @@ def update_investigation(investigation_id: int, payload: InvestigationStatusRequ
 
 
 @app.get("/api/v1/research/discovery")
-def discovery_overview(as_of: str | None = None, knowledge_mode: Literal["system_known", "source_known"] = "system_known", operator=Depends(research_reader)):
+def discovery_overview(as_of: str | None = None, knowledge_mode: Literal["system_known", "source_known"] = "system_known", episode_end: date | None = None, operator=Depends(research_reader)):
     when = parsed_as_of(as_of)
-    if when > datetime.now(timezone.utc):
+    if when > datetime.now(timezone.utc) or (episode_end and episode_end > when.date()):
         raise HTTPException(422, "Future discovery evaluation is unavailable")
     with Session(DB) as session:
-        result = evaluate_discovery(session, when, knowledge_mode)
+        result = evaluate_discovery(session, when, knowledge_mode, episode_end=episode_end)
         # Current status must not leak into a historical as-of view.
         result["investigations"] = [{"id": item.id, "candidate_key": item.candidate_key, "status": item.status, "snapshot_id": item.snapshot_id, "updated_at": item.updated_at.isoformat()} for item in session.scalars(select(DiscoveryHypothesis).where(DiscoveryHypothesis.opened_at <= when, DiscoveryHypothesis.updated_at <= when).order_by(DiscoveryHypothesis.id.desc()).limit(30))]
         return result
+
+
+@app.get("/api/v1/research/coverage")
+def indian_research_coverage(as_of: str | None = None, operator=Depends(research_reader)):
+    when = parsed_as_of(as_of)
+    if when > datetime.now(timezone.utc):
+        raise HTTPException(422, "Future coverage is unavailable")
+    with Session(DB) as session:
+        return economic_coverage(session, when)
 
 
 class DiscoverySnapshotRequest(BaseModel):
     snapshot_key: str = Field(min_length=8, max_length=160)
     as_of: datetime | None = None
     knowledge_mode: Literal["system_known", "source_known"] = "system_known"
+    episode_end: date | None = None
 
 
 @app.post("/api/v1/research/discovery/snapshots")
 def record_discovery(payload: DiscoverySnapshotRequest, operator=Depends(research_writer)):
     now = datetime.now(timezone.utc)
     when = payload.as_of or now
-    if when.tzinfo is None or when > now:
+    if when.tzinfo is None or when > now or (payload.episode_end and payload.episode_end > when.date()):
         raise HTTPException(422, "Snapshot time must be timezone-aware and not in the future")
     with Session(DB) as session:
         try:
-            row = persist_discovery(session, when, payload.snapshot_key, operator["operator_id"], payload.knowledge_mode, now)
+            row = persist_discovery(session, when, payload.snapshot_key, operator["operator_id"], payload.knowledge_mode, now, payload.episode_end)
         except ValueError as exc:
             raise HTTPException(409, str(exc)) from exc
         audit_admin(session, operator["operator_id"], "discovery_snapshot_record", "success", f"id={row.id};mode={row.knowledge_mode};rules={row.rule_version}")
