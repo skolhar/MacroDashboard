@@ -25,6 +25,8 @@ services:
       OPERATOR_AUTH_MODE: db
       TRUSTED_PROXY_CIDRS: 172.30.51.10/32
       SOURCE_ARCHIVE_ROOT: /var/lib/smarthedge/source-archive
+      MARKET_DATA_RESEARCH_ENABLED: ${MARKET_DATA_RESEARCH_ENABLED:-false}
+      MARKET_DATA_PROVIDER: ${MARKET_DATA_PROVIDER:-yahoo}
       SOURCE_ARCHIVE_MAX_BYTES: ${STAGING_SOURCE_ARCHIVE_MAX_BYTES:-4000000}
     volumes:
       - staging_source_archive:/var/lib/smarthedge/source-archive

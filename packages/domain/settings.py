@@ -12,6 +12,8 @@ class Settings:
     database_url: str
     operator_auth_mode: str
     trusted_proxy_cidrs: tuple[str, ...]
+    market_research_enabled: bool
+    market_provider: str
 
 
 def settings() -> Settings:
@@ -35,7 +37,13 @@ def settings() -> Settings:
     if token_hash and (len(token_hash) != 64 or any(c not in "0123456789abcdef" for c in token_hash.lower())):
         raise ValueError("ADMIN_TOKEN_SHA256 must be a SHA-256 hex digest")
     cidrs = tuple(part.strip() for part in os.getenv("TRUSTED_PROXY_CIDRS", "").split(",") if part.strip())
-    return Settings(environment, demo, token_hash, database_url, auth_mode, cidrs)
+    market_research = os.getenv("MARKET_DATA_RESEARCH_ENABLED", "false").lower() == "true"
+    if market_research and environment not in {"development", "staging"}:
+        raise ValueError("Market-data research requires isolated development or staging")
+    market_provider = os.getenv("MARKET_DATA_PROVIDER", "yahoo").lower()
+    if market_provider not in {"yahoo", "upstox"}:
+        raise ValueError("Unknown market-data provider")
+    return Settings(environment, demo, token_hash, database_url, auth_mode, cidrs, market_research, market_provider)
 
 
 def token_digest(token: str) -> str:
