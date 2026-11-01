@@ -8,6 +8,8 @@ Assignment 3 adds [private anomaly discovery](http://localhost:3000/intelligence
 
 Assignment 4 extends that private view with a focused 11-indicator Indian research registry, actual World Bank WDI/GEM annual and monthly acquisition, versioned economic transformations, explicit stale/missing coverage, and retrospective episode analysis. It has **no live reflexivity-cycle claim**: the actual-source demonstration found single-series patterns but no confirmed cross-indicator feedback candidate. See the [methodology](docs/assignment4-indian-macro.md) and [real-data report](docs/assignment4-real-data-report.md).
 
+Assignment 5 adds private actor-response research using RBI Innovation Hub's experimental DBIE mirror for fortnightly bank credit/deposits, daily signed RBI liquidity operations, and weekly gross reserves. It tests chronological disturbances, later operations, counterforces and follow-up bank reports without treating correlation as causation. The [actual-source investigation](docs/assignment5-real-data-report.md) found contradictory evidence for a proposed 2025 RBI liquidity-injection response, not a confirmed feedback loop. See the [methodology and access limits](docs/assignment5-actor-response.md). Mirror data is not used by the public monitor.
+
 The existing application has a separate, provider-neutral **market-data foundation** for daily Nifty, USD/INR, global futures proxies and a ten-symbol NSE ETF watchlist. Yahoo/yfinance is the initial research adapter; Upstox is a future adapter slot. Market prices never enter the governed RBI/NSDL/AMFI release tables or macro scores automatically. There is no brokerage connection, options execution or order routing.
 
 ## Current data status

@@ -9,13 +9,15 @@ import yaml
 from sqlalchemy import select
 from packages.domain.models import DiscoverySnapshot, IndicatorDefinition, MarketBar, Observation, ResearchEvidence
 from packages.scoring.economic_transform import configuration as transformation_configuration, transform_series
+from packages.scoring.actor_response import evaluate as evaluate_actor_responses
+from packages.connectors.rbi_research_mirror import registry as actor_registry
 
-RULES_PATH = Path(__file__).resolve().parents[2] / "config/discovery.v2.yaml"
+RULES_PATH = Path(__file__).resolve().parents[2] / "config/discovery.v3.yaml"
 
 
 def rules():
     config = yaml.safe_load(RULES_PATH.read_text())
-    if config.get("version") != "discovery-v2" or config["minimum_baseline_periods"] < 4 or config["persistent_periods"] < 2:
+    if config.get("version") != "discovery-v3" or config["minimum_baseline_periods"] < 4 or config["persistent_periods"] < 2:
         raise ValueError("Unsupported discovery rules")
     return config
 
@@ -79,7 +81,7 @@ def _series(series, rows, as_of, config, transform_spec=None):
         result["limitations"].append(f"At least {baseline_n} baseline and {persistent_n} follow-up periods required; {len(usable)} available.")
         return result
     recent = usable[-(baseline_n + persistent_n):]
-    max_gap = {"business_daily": 6, "daily": 5, "weekly": 11, "monthly": 45, "quarterly": 110, "annual": 400, "event": 365}
+    max_gap = {"business_daily": 6, "daily": 5, "weekly": 11, "fortnightly": 35, "monthly": 45, "quarterly": 110, "annual": 400, "event": 365}
     if any((later["date"] - earlier["date"]).days > max_gap.get(later["frequency"], 90) for earlier, later in zip(recent, recent[1:])):
         result["status"] = "INCOMPLETE_HISTORY"
         result["limitations"].append("A reporting-period gap interrupts the baseline or persistence window; no consecutive-period claim is made.")
@@ -162,11 +164,13 @@ def evaluate(session, as_of: datetime, knowledge_mode="system_known", include_te
     reference_time = datetime.combine(episode_end, datetime.min.time(), as_of.tzinfo) if episode_end else as_of
     series = {key: _series(key, group, reference_time, config, transform_cfg["series"].get(key)) for key, group in sorted(grouped.items())}
     relationships = _relationships(series, config)
+    actor_assessment = evaluate_actor_responses(rows, as_of, episode_end, knowledge_mode)
+    actor_candidates = [actor_assessment] if actor_assessment["status"] in {"POTENTIAL_REINFORCEMENT", "WEAKENING_REINFORCEMENT", "EMERGING_INFLECTION", "CONTRADICTORY_EVIDENCE"} else []
     vintages = [{"kind": row["kind"], "id": row["id"], "revision": row["revision"]} for row in sorted(rows, key=lambda x: (x["kind"], x["id"]))]
-    return {"as_of": as_of.isoformat(), "episode_end": episode_end.isoformat() if episode_end else None, "knowledge_mode": knowledge_mode, "analysis_basis": "retrospective_current_vintage" if episode_end else "retrospective_source_reconstruction" if knowledge_mode == "source_known" else "system_known_research", "rule_version": config["version"], "transformation_version": transform_cfg["version"], "series": series, "persistent_anomalies": [item for item in series.values() if item["persistent"]], "relationships": relationships, "candidate_hypotheses": relationships, "input_vintages": vintages, "limitations": "Statistical anomalies and co-occurrence are research leads, never established feedback loops or investment forecasts. Episode reconstruction uses observations known at the knowledge cutoff, which may include later revisions; it is not a historical live assessment.", "source_coverage": {"numeric_series": len(series), "unavailable_relationships": [pair["id"] for pair in config["relationships"] if pair["id"] not in {r["relationship_id"] for r in relationships}]}}
+    return {"as_of": as_of.isoformat(), "episode_end": episode_end.isoformat() if episode_end else None, "knowledge_mode": knowledge_mode, "analysis_basis": "retrospective_current_vintage" if episode_end else "retrospective_source_reconstruction" if knowledge_mode == "source_known" else "system_known_research", "rule_version": config["version"], "transformation_version": transform_cfg["version"], "actor_rule_version": actor_assessment["rule_version"], "series": series, "persistent_anomalies": [item for item in series.values() if item["persistent"]], "relationships": relationships, "actor_responses": [actor_assessment], "candidate_hypotheses": relationships + actor_candidates, "input_vintages": vintages, "limitations": "Statistical anomalies and co-occurrence are research leads, never established feedback loops or investment forecasts. Actor-response timing is descriptive, not causal proof. Episode reconstruction uses observations known at the knowledge cutoff, which may include later revisions; it is not a historical live assessment.", "source_coverage": {"numeric_series": len(series), "unavailable_relationships": [pair["id"] for pair in config["relationships"] if pair["id"] not in {r["relationship_id"] for r in relationships}]}}
 
 
-def persist(session, as_of, key, operator, knowledge_mode="system_known", recorded_at=None, episode_end=None):
+def persist(session, as_of, key, operator, knowledge_mode="system_known", recorded_at=None, episode_end=None, include_test_fixtures=False):
     recorded_at = recorded_at or datetime.now(timezone.utc)
     if as_of > recorded_at or recorded_at.tzinfo is None:
         raise ValueError("Invalid discovery snapshot time")
@@ -175,9 +179,9 @@ def persist(session, as_of, key, operator, knowledge_mode="system_known", record
         if prior.as_of != as_of or prior.knowledge_mode != knowledge_mode or json.loads(prior.result_json).get("episode_end") != (episode_end.isoformat() if episode_end else None):
             raise ValueError("Snapshot key already names a different evaluation")
         return prior
-    result = evaluate(session, as_of, knowledge_mode, episode_end=episode_end)
+    result = evaluate(session, as_of, knowledge_mode, include_test_fixtures=include_test_fixtures, episode_end=episode_end)
     config = rules()
-    row = DiscoverySnapshot(snapshot_key=key, as_of=as_of, recorded_at=recorded_at, knowledge_mode=knowledge_mode, rule_version=config["version"], rules_json=json.dumps({"discovery": config, "transformations": transformation_configuration()}, sort_keys=True), input_vintages_json=json.dumps(result["input_vintages"], sort_keys=True), result_json=json.dumps(result, sort_keys=True), recorded_by=operator)
+    row = DiscoverySnapshot(snapshot_key=key, as_of=as_of, recorded_at=recorded_at, knowledge_mode=knowledge_mode, rule_version=config["version"], rules_json=json.dumps({"discovery": config, "transformations": transformation_configuration(), "actor_responses": actor_registry()}, sort_keys=True, default=str), input_vintages_json=json.dumps(result["input_vintages"], sort_keys=True), result_json=json.dumps(result, sort_keys=True), recorded_by=operator)
     session.add(row)
     session.flush()
     return row

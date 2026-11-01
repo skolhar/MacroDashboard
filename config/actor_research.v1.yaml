@@ -1,0 +1,63 @@
+version: actor-research-v1
+source: rbi_innovation_hub_dbie_mirror
+source_url: https://data-api.dbie.rbihub.in/api/tables
+usage: private_exploratory_research_only
+tables:
+  bank:
+    path: financial_sector/r901_scheduled_commercial_banks_select_aggregates
+    title: Scheduled Commercial Banks - Select Aggregates
+    frequency: Fortnightly
+    source: statistics
+    header_row: 6
+    unit_row: 4
+    unit_marker: (₹ Crores)
+    date_column: c1
+    indicators:
+      rbi_mirror_bank_credit_cr: {column: c15, header: Bank Credit (11+12), unit: inr_crore, frequency: fortnightly, name: Bank credit outstanding}
+      rbi_mirror_bank_deposits_cr: {column: c4, header: Aggregate deposits (2+3), unit: inr_crore, frequency: fortnightly, name: Aggregate bank deposits outstanding}
+  liquidity:
+    path: financial_markets/r702_liquidity_operations_by_rbi
+    title: Liquidity Operations by RBI
+    frequency: Daily
+    source: statistics
+    header_row: 7
+    unit_row: 4
+    unit_marker: (Rupees Crores)
+    date_column: c1
+    indicators:
+      rbi_mirror_net_injection_cr: {column: c18, header: Net Injection (+)/ Absorption (-) (1+3+5+7+10-2-4-6-9), unit: inr_crore_signed, frequency: daily, name: RBI net liquidity injection or absorption}
+  reserves:
+    path: external_sector/r1_foreign_exchange_reserves_weekly
+    title: Foreign Exchange Reserves - Weekly
+    frequency: Weekly
+    source: publication
+    header_row: 8
+    unit_row: 6
+    unit_marker: 'US Dollar : Millions'
+    subheader_row: 9
+    subheader_marker: US Dollar
+    date_column: c1
+    indicators:
+      rbi_mirror_gross_reserves_usd_mn: {column: c3, header_column: c2, header: 1 Total Reserves, unit: usd_million, frequency: weekly, name: Gross foreign-exchange reserves}
+mechanisms:
+  credit_funding_liquidity_response:
+    thesis: Faster bank-credit growth than deposit growth may raise funding pressure; RBI liquidity operations may ease or offset that pressure.
+    initial_disturbance: Bank credit growth persistently exceeds deposit growth.
+    actors: [commercial banks, borrowers, Reserve Bank of India]
+    incentives: [fund loans at viable cost, obtain credit, manage system liquidity]
+    observed_response: RBI net liquidity injection or absorption after the funding gap appears.
+    proposed_feedback: Liquidity provision could support continued bank lending; a subsequent credit response is required and alternative drivers must be investigated.
+    possible_balancing: Deposit growth catches up, credit demand slows, or RBI absorbs liquidity.
+    transmission: [bank funding conditions, loan supply, investment and consumption]
+    alternatives: [government cash balances, seasonal credit demand, merger-related level changes, RBI operations unrelated to credit]
+    confirmation: [dated bank lending and deposit releases after RBI operations, RBI-stated operational objective, independent borrower-demand evidence]
+    falsification: [funding gap closes before RBI action, operations are driven by unrelated cash balances, credit growth fails to respond]
+    response_window_days: 45
+    followup_window_days: 90
+    max_episode_age_days: 180
+    disturbance_periods: 2
+    response_days: 5
+    followup_periods: 2
+    bank_freshness_days: 45
+    liquidity_freshness_days: 14
+    definition_breaks: [2023-07-01, 2025-12-15]

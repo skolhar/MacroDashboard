@@ -1,0 +1,164 @@
+"""Synthetic actor-response fixtures; no values here are Indian observations."""
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
+from types import SimpleNamespace
+import httpx
+import pytest
+from sqlalchemy import select
+from packages.connectors.rbi_research_mirror import MirrorRecord, RBIResearchMirrorAdapter, parse_table
+from packages.domain.models import IngestionRun, ResearchEvidence
+from packages.jobs.rbi_mirror_research import ingest
+from packages.scoring.actor_response import CREDIT, DEPOSITS, LIQUIDITY, evaluate as actor_evaluate
+from packages.scoring.discovery import evaluate as discovery_evaluate, persist as persist_discovery, replay as replay_discovery
+from packages.scoring.economic_transform import transform_series
+
+UTC = timezone.utc
+
+
+def fact(key, day, value, ident, frequency):
+    return {"kind": "private_research", "id": ident, "series": key, "date": day, "value": Decimal(str(value)), "source_value_text": str(value), "frequency": frequency, "source": "Synthetic test fixture", "reference": "https://example.org/synthetic", "revision": "v1", "published_at": None, "retrieved_at": datetime(2025, 2, 15, tzinfo=UTC), "quality": "estimated"}
+
+
+def sequence(response=100, follow=1.20, include_liquidity=True, initial_year=2023):
+    bank = []
+    for i in range(56):
+        day = date(initial_year, 1, 6) + timedelta(days=14 * i)
+        deposits = Decimal("1000") + Decimal(i * 10)
+        multiplier = Decimal("1.0") if i < 52 else Decimal("1.1") if i < 54 else Decimal(str(follow))
+        bank.extend([fact(CREDIT, day, deposits * multiplier, i * 2 + 1, "fortnightly"), fact(DEPOSITS, day, deposits, i * 2 + 2, "fortnightly")])
+    second = bank[106]["date"]
+    liquidity = [fact(LIQUIDITY, second + timedelta(days=i), response, 200 + i, "daily") for i in range(1, 6)] if include_liquidity else []
+    last = bank[-1]["date"]
+    if include_liquidity:
+        liquidity.append(fact(LIQUIDITY, last, response, 300, "daily"))
+    return bank + liquidity, last + timedelta(days=1)
+
+
+def test_actor_sequence_requires_prior_regime_and_temporal_response():
+    rows, last = sequence()
+    result = actor_evaluate(rows, datetime.combine(last, datetime.min.time(), UTC))
+    assert result["status"] == "POTENTIAL_REINFORCEMENT"
+    assert result["causal_status"] == "unverified_interpretation"
+    assert result["disturbance_periods"][-1] < result["response_periods"][0] < result["followup_periods"][0]
+    assert len({(x["kind"], x["id"]) for x in result["observations"]}) == len(result["observations"])
+    assert result["confirmation_needed"] and result["alternatives"]
+    no_response = [r for r in rows if r["series"] != LIQUIDITY]
+    assert actor_evaluate(no_response, datetime.combine(last, datetime.min.time(), UTC))["status"] == "INSUFFICIENT_EVIDENCE"
+    prior = fact(LIQUIDITY, date(2024, 1, 1), 100, 999, "daily")
+    assert actor_evaluate(no_response + [prior], datetime.combine(last, datetime.min.time(), UTC))["status"] != "POTENTIAL_REINFORCEMENT"
+
+
+def test_actor_counterforce_weakening_definition_and_frequency():
+    rows, last = sequence(response=-100)
+    result = actor_evaluate(rows, datetime.combine(last, datetime.min.time(), UTC))
+    assert result["status"] == "CONTRADICTORY_EVIDENCE"
+    assert "absorption" in result["explanation"]
+    weaker, last = sequence(follow=1.05)
+    assert actor_evaluate(weaker, datetime.combine(last, datetime.min.time(), UTC))["status"] == "WEAKENING_REINFORCEMENT"
+    wrong_frequency = [dict(row, frequency="monthly") if row["series"] == CREDIT else row for row in weaker]
+    assert actor_evaluate(wrong_frequency, datetime.combine(last, datetime.min.time(), UTC))["status"] == "CONFLICTING_EVIDENCE"
+    changed, last = sequence(initial_year=2024)
+    assert actor_evaluate(changed, datetime.combine(last, datetime.min.time(), UTC))["status"] == "DEFINITION_REVIEW"
+
+
+def test_actor_stale_and_historical_only():
+    rows, last = sequence()
+    assert actor_evaluate(rows, datetime.combine(last + timedelta(days=90), datetime.min.time(), UTC))["status"] == "STALE_EVIDENCE"
+    assert actor_evaluate(rows, datetime.combine(last + timedelta(days=300), datetime.min.time(), UTC))["status"] == "HISTORICAL_ONLY"
+
+
+def test_mirror_parser_rejects_changed_units_and_headers():
+    meta = {"data": {"title": "Scheduled Commercial Banks - Select Aggregates", "frequency": "Fortnightly", "source": "statistics", "layout": "columns", "key": "financial_sector.r901_scheduled_commercial_banks_select_aggregates", "row_count": 8, "loaded_at": "2026-10-31T00:00:00Z", "dbie_path": "RBI DBIE"}, "provenance": {"report_name": "Scheduled Commercial Banks - Select Aggregates", "exported_at": "2026-10-31", "period_to": "31-AUG-2026"}}
+    columns = ["row_no"] + [f"c{i}" for i in range(1, 20)]
+    rows = [[i] + [""] * 19 for i in range(1, 9)]
+    rows[3][1] = "(₹ Crores)"
+    rows[5][4] = "Aggregate deposits (2+3)"
+    rows[5][15] = "Bank Credit (11+12)"
+    rows[7][1], rows[7][4], rows[7][15] = "Oct 15, 2026", "2,000", "1,500"
+    payload = {"columns": columns, "rows": rows}
+    parsed = parse_table(meta, payload, "bank", date(2025, 1, 1))
+    assert len(parsed) == 2 and all("period_to predates" in item.definition_note for item in parsed)
+    rows[3][1] = "USD millions"
+    with pytest.raises(ValueError, match="unit"):
+        parse_table(meta, payload, "bank")
+    rows[3][1] = "(₹ Crores)"
+    rows[5][15] = "Adjusted bank credit"
+    with pytest.raises(ValueError, match="definition"):
+        parse_table(meta, payload, "bank")
+    rows[5][15] = "Bank Credit (11+12)"
+    rows[7][1] = "unparseable date"
+    with pytest.raises(ValueError, match="date"):
+        parse_table(meta, payload, "bank")
+
+
+def test_mirror_idempotency_revision_and_fail_closed(db, monkeypatch):
+    reference = "https://data-api.dbie.rbihub.in/api/tables/financial_sector/r901_scheduled_commercial_banks_select_aggregates#row-8"
+    record = MirrorRecord(CREDIT, date(2025, 1, 10), Decimal("100"), "inr_crore", "fortnightly", reference, "2026-10-31", "RBI DBIE", "Synthetic fixture")
+    adapter = SimpleNamespace(provider="rbi_innovation_hub_dbie_mirror_research", fetch=lambda *_: [record])
+    assert ingest(db, "bank", adapter)["inserted"] == 1
+    assert ingest(db, "bank", adapter)["duplicates"] == 1
+    adapter.fetch = lambda *_: [MirrorRecord(CREDIT, record.period_end, Decimal("101"), record.unit, record.frequency, reference, "2026-11-01", "RBI DBIE", "Synthetic fixture")]
+    assert ingest(db, "bank", adapter)["inserted"] == 1
+    facts = db.scalars(select(ResearchEvidence).where(ResearchEvidence.indicator_key == CREDIT)).all()
+    assert len(facts) == 2 and all(row.published_at is None for row in facts)
+    assert {row.value_text for row in facts} == {"100", "101"}
+    monkeypatch.setattr("packages.connectors.rbi_research_mirror.time.sleep", lambda *_: None)
+    with httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(503, request=request))) as client:
+        with pytest.raises(httpx.HTTPStatusError):
+            ingest(db, "liquidity", RBIResearchMirrorAdapter(client))
+    run = db.scalar(select(IngestionRun).where(IngestionRun.provider.endswith(":liquidity")))
+    assert run.status == "failed" and run.error_code == "HTTPStatusError"
+
+
+def test_fortnightly_yoy_does_not_bridge_definition_break():
+    rows, _ = sequence()
+    credit = [row for row in rows if row["series"] == CREDIT]
+    transformed = transform_series(credit, {"primary": "yoy_pct", "definition_breaks": ["2025-01-01"]})
+    assert all(not (row["date"].year == 2025 and row["date"].month == 1) for row in transformed)
+
+
+def test_historical_vintages_snapshot_and_candidate_persistence(db, monkeypatch):
+    rows, last = sequence()
+    as_of = datetime.combine(last, datetime.min.time(), UTC)
+    for row in rows:
+        db.add(ResearchEvidence(indicator_key=row["series"], indicator_or_claim="Synthetic test fixture", frequency=row["frequency"], value_numeric=row["value"], value_text=str(row["value"]), unit="inr_crore", period_start=row["date"], period_end=row["date"], source_name="Synthetic test fixture", source_reference=row["reference"], retrieved_at=as_of - timedelta(days=1), published_at=None, reliability_note="Synthetic test value", usage_basis="Synthetic test fixture for regression only", quality="estimated", revision_id="v1", observation_key=f"synthetic-actor-{row['id']}", entered_by="test"))
+    db.flush()
+    before = discovery_evaluate(db, as_of, include_test_fixtures=True)
+    actor = before["actor_responses"][0]
+    assert actor["status"] == "POTENTIAL_REINFORCEMENT"
+    assert actor["key"] in {candidate["key"] for candidate in before["candidate_hypotheses"]}
+    snapshot = persist_discovery(db, as_of, "synthetic-actor-snapshot", "test", recorded_at=as_of + timedelta(days=2), include_test_fixtures=True)
+    frozen = replay_discovery(snapshot)
+    assert frozen["result"]["actor_responses"][0]["status"] == actor["status"]
+    assert frozen["rules"]["actor_responses"]["version"] == "actor-research-v1"
+    assert persist_discovery(db, as_of, "synthetic-actor-snapshot", "test", recorded_at=as_of + timedelta(days=2), include_test_fixtures=True).id == snapshot.id
+    from fastapi.testclient import TestClient
+    from packages.jobs.operators import issue
+    import apps.api.main as api
+    db.commit()
+    monkeypatch.setattr(api, "DB", db.bind)
+    monkeypatch.setattr(api, "DEMO", False)
+    monkeypatch.setattr(api, "LIMITER", SimpleNamespace(allow=lambda *args, **kwargs: True))
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.setenv("OPERATOR_AUTH_MODE", "db")
+    writer = issue(db, "actor-investigator", {"research:write"}, 1)
+    reader = issue(db, "actor-reader", {"research:read"}, 1)
+    client = TestClient(api.app)
+    path = "/api/v1/research/discovery/hypotheses"
+    payload = {"snapshot_id": snapshot.id, "candidate_key": actor["key"], "investigation_question": "What motivated the observed RBI operation after the bank funding gap?"}
+    assert client.post(path, json=payload, headers={"X-Admin-Token": reader}).status_code == 403
+    opened = client.post(path, json=payload, headers={"X-Admin-Token": writer})
+    assert opened.status_code == 200 and opened.json()["duplicate"] is False
+    repeated = client.post(path, json=payload, headers={"X-Admin-Token": writer})
+    assert repeated.status_code == 200 and repeated.json()["id"] == opened.json()["id"] and repeated.json()["duplicate"] is True
+    later_snapshot = persist_discovery(db, as_of + timedelta(days=1), "synthetic-actor-snapshot-later", "test", recorded_at=as_of + timedelta(days=3), include_test_fixtures=True)
+    db.commit()
+    repeated_later = client.post(path, json={**payload, "snapshot_id": later_snapshot.id}, headers={"X-Admin-Token": writer})
+    assert repeated_later.status_code == 200 and repeated_later.json()["id"] == opened.json()["id"]
+    revised = next(row for row in rows if row["series"] == CREDIT and row["date"] == last - timedelta(days=1))
+    db.add(ResearchEvidence(indicator_key=CREDIT, indicator_or_claim="Synthetic revised test fixture", frequency="fortnightly", value_numeric=Decimal("100"), value_text="100", unit="inr_crore", period_start=revised["date"], period_end=revised["date"], source_name="Synthetic test fixture", source_reference=revised["reference"], retrieved_at=as_of + timedelta(days=5), published_at=None, reliability_note="Synthetic late revision", usage_basis="Synthetic test fixture for regression only", quality="estimated", revision_id="v2", observation_key="synthetic-actor-late-revision", entered_by="test"))
+    db.flush()
+    assert discovery_evaluate(db, as_of, include_test_fixtures=True)["actor_responses"][0]["status"] == actor["status"]
+    after = discovery_evaluate(db, as_of + timedelta(days=10), include_test_fixtures=True)
+    assert any(item["revision"] == "v2" for item in after["actor_responses"][0]["observations"])
+    assert replay_discovery(snapshot)["result"] == frozen["result"]
