@@ -2,3 +2,4 @@
 
 @media(min-width:901px){.summary{grid-template-columns:1.7fr 1fr 1fr 1fr 1.2fr}}
 .cycle-history{margin:12px 0 0;color:#9eb0bf;font-size:11px}
+.chart-grid{display:grid;grid-template-columns:1fr;gap:18px;margin:14px 0}.chart-grid h3{margin:0 0 8px;font-size:12px;letter-spacing:.05em;color:#9eb0bf;text-transform:uppercase}.chart-grid .chart{height:150px}.chart-grid .chart-axis span:nth-child(2){display:none}@media(min-width:981px){.chart-grid{grid-template-columns:1fr 1fr 1fr}.chart-grid .chart-axis span:nth-child(2){display:inline}}@media(max-width:700px){.chart-grid .chart{height:120px}}
