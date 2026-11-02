@@ -4,6 +4,7 @@ from hashlib import sha256
 import argparse
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 from packages.connectors.rbi_research_mirror import RBIResearchMirrorAdapter, registry
 from packages.domain.models import IngestionRun, ResearchEvidence
 from packages.domain.settings import settings

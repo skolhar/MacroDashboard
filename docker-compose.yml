@@ -44,6 +44,24 @@ services:
     networks:
       - default
       - webui-shared
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    command: python -m packages.jobs.scheduler
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env}
+      APP_ENV: ${APP_ENV:-demo}
+      DEMO_MODE: ${DEMO_MODE:-true}
+      INGESTION_SCHEDULE_ENABLED: ${INGESTION_SCHEDULE_ENABLED:-false}
+      MARKET_DATA_RESEARCH_ENABLED: ${MARKET_DATA_RESEARCH_ENABLED:-false}
+      MARKET_DATA_PROVIDER: ${MARKET_DATA_PROVIDER:-yahoo}
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - default
+    restart: unless-stopped
 volumes:
   pgdata:
 

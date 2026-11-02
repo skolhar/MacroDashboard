@@ -36,9 +36,29 @@ def run_once(session: Session, adapter=None, as_of=None):
         raise
 
 
+def _flows_and_market_once(db):
+    """Daily FPI/DII net flows and incremental Nifty closes; each fails soft."""
+    from datetime import date as date_type
+    from packages.jobs.india_flows_refresh import refresh_once
+    with Session(db) as session:
+        try:
+            print(f"India flows: {refresh_once(session, date_type(2026, 4, 1))}", flush=True)
+        except Exception as exc:
+            print(f"India flows refresh failed: {type(exc).__name__}", flush=True)
+        try:
+            from packages.market.base import instruments as market_instruments
+            from packages.market.operations import refresh as market_refresh_operation
+            from packages.market.providers import provider_for
+            cfg = settings()
+            spec = market_instruments()["nifty50"]
+            print(f"Market refresh: {market_refresh_operation(session, provider_for(cfg.market_provider), spec)}", flush=True)
+        except Exception as exc:
+            print(f"Market refresh failed: {type(exc).__name__}", flush=True)
+
+
 def main():
-    if settings().environment != "staging" or os.getenv("INGESTION_SCHEDULE_ENABLED") != "true":
-        raise RuntimeError("Scheduler requires explicit staging enablement")
+    if settings().environment not in {"staging", "development"} or os.getenv("INGESTION_SCHEDULE_ENABLED") != "true":
+        raise RuntimeError("Scheduler requires explicit enablement")
     db = engine()
     with Session(db) as session:
         sync_registry(session)
@@ -48,6 +68,7 @@ def main():
                 run_once(session)
             except Exception as exc:
                 print(f"Treasury ingestion failed: {type(exc).__name__}", flush=True)
+        _flows_and_market_once(db)
         DatabaseRateLimiter(db).prune()
         time.sleep(21600)
 

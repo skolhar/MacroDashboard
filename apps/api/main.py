@@ -842,6 +842,23 @@ def run_ingestion(payload: IngestionRequest, operator=Depends(require_scope("ing
         raise HTTPException(502, "Source ingestion failed; last known data retained")
 
 
+def _market_close_rows(session, when, mode):
+    """Point-in-time Nifty closes from the existing market-bars store (Yahoo).
+
+    Market prices stay in their own append-only table; the private research
+    endpoints read them here rather than duplicating them into observations.
+    """
+    from types import SimpleNamespace
+    from packages.market.operations import history_at
+    bars = history_at(session, "nifty50", "yahoo", when)
+    return [SimpleNamespace(
+        period_start=bar.session_date, period_end=bar.session_date, value=bar.close,
+        published_at=bar.retrieved_at, ingested_at=bar.retrieved_at,
+        provider=bar.provider, source_url=bar.source_url,
+        vintage_id=f"yahoo-{bar.content_hash[:12]}", quality="secondary_unverified",
+    ) for bar in bars]
+
+
 @app.get("/api/v1/capital-flows")
 def capital_flows(as_of: str | None = None, vintage_mode: str = "system_known", operator=Depends(research_reader)):
     """Private capital-flow investigation snapshot with point-in-time selection.
@@ -871,6 +888,8 @@ def capital_flows(as_of: str | None = None, vintage_mode: str = "system_known", 
         with Session(DB) as session:
             for indicator_id, key in series_ids.items():
                 rows[key] = observations_at(session, indicator_id, when, vintage_mode, DEMO)
+                if key == "returns" and not rows[key]:
+                    rows[key] = _market_close_rows(session, when, vintage_mode)
     except Exception:
         rows = {}
     has_flows = bool(rows.get("fpi")) and bool(rows.get("dii"))
@@ -943,6 +962,8 @@ def reflexivity_cycle(as_of: str | None = None, vintage_mode: str = "system_know
         with Session(DB) as session:
             for indicator_id, key in series_ids.items():
                 obs = observations_at(session, indicator_id, when, vintage_mode, DEMO)
+                if key == "returns" and not obs:
+                    obs = _market_close_rows(session, when, vintage_mode)
                 if not obs:
                     summaries[key] = {"indicator_id": indicator_id, "label": labels[key], "unit": units[key], "status": "missing"}
                     continue
@@ -957,6 +978,8 @@ def reflexivity_cycle(as_of: str | None = None, vintage_mode: str = "system_know
                     "observation_count": len(obs),
                 }
             closes = observations_at(session, "india_nifty50_close_level", when, vintage_mode, DEMO)
+            if not closes:
+                closes = _market_close_rows(session, when, vintage_mode)
             if len(closes) >= 2:
                 close_records = [CapitalFlowRecord(
                     series="india_nifty50_close_level", period_end=o.period_end, value=o.value,

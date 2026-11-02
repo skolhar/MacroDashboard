@@ -30,3 +30,7 @@ indicators:
   - {id: hyperscaler_capex_guidance_growth, display_name: Hyperscaler capex guidance growth, cycle: global, unit: pct, frequency: quarterly, transform: raw, source_priority: [company_filings, manual_import]}
   - {id: market_breadth_pct_above_200dma, display_name: Breadth above 200DMA, cycle: earnings, unit: pct, frequency: business_daily, transform: raw, source_priority: [licensed_vendor, manual_import]}
   - {id: nifty50_trailing_pe, display_name: Nifty trailing P/E, cycle: earnings, unit: multiple, frequency: business_daily, transform: percentile_252, source_priority: [licensed_vendor, manual_import]}
+  - {id: india_fpi_equity_net_flow_inr_cr, display_name: FPI equity net flow, cycle: flows, unit: inr_crore, frequency: business_daily, transform: rolling_sum_20, source_priority: [exchange_publisher, automatic_public_source, manual_import]}
+  - {id: india_dii_equity_net_flow_inr_cr, display_name: DII equity net flow, cycle: flows, unit: inr_crore, frequency: business_daily, transform: rolling_sum_20, source_priority: [exchange_publisher, automatic_public_source, manual_import]}
+  - {id: india_mf_sip_contribution_inr_cr, display_name: SIP contribution, cycle: flows, unit: inr_crore, frequency: monthly, transform: raw, source_priority: [amfi, manual_import]}
+  - {id: india_nifty50_close_level, display_name: Nifty 50 close level, cycle: earnings, unit: index_points, frequency: business_daily, transform: change_pct_60, source_priority: [exchange, automatic_public_source, manual_import]}
