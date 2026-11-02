@@ -908,3 +908,73 @@ def capital_flows(as_of: str | None = None, vintage_mode: str = "system_known", 
     )
 
     return {"as_of": when.isoformat(), "state": "investigation_available", "vintage_mode": vintage_mode, **result}
+
+
+@app.get("/api/v1/research/reflexivity-cycle")
+def reflexivity_cycle(as_of: str | None = None, vintage_mode: str = "system_known", operator=Depends(research_reader)):
+    """Cycle-centric research view: domestic equity flows and market reflexivity.
+
+    Composes the existing capital-flow investigation into five research
+    sections: current observations, the proposed feedback hypothesis,
+    supporting/contradictory/insufficient evidence, inflection conditions to
+    monitor, and conditional 1-3 and 3-6 month implications. Descriptive
+    only; never a price target, probability or buy/sell signal.
+    """
+    from packages.scoring.reflexivity_cycle import (
+        DAILY_STALE_DAYS, MONTHLY_STALE_DAYS, reflexivity_cycle_view, unavailable_view,
+    )
+    from packages.connectors.india_capital_flows import CapitalFlowRecord, monthly_returns_from_closes
+    from packages.domain.store import observations_at
+
+    when = parsed_as_of(as_of)
+    if vintage_mode not in {"system_known", "source_known"}:
+        raise HTTPException(422, "vintage_mode must be system_known or source_known")
+    series_ids = {
+        "india_fpi_equity_net_flow_inr_cr": "fpi",
+        "india_dii_equity_net_flow_inr_cr": "dii",
+        "india_mf_sip_contribution_inr_cr": "sip",
+        "india_nifty50_close_level": "returns",
+    }
+    stale_after = {"fpi": DAILY_STALE_DAYS, "dii": DAILY_STALE_DAYS, "sip": MONTHLY_STALE_DAYS, "returns": DAILY_STALE_DAYS}
+    labels = {"fpi": "FPI equity flows", "dii": "DII equity flows", "sip": "SIP contributions", "returns": "Nifty closes"}
+    units = {"fpi": "INR crore", "dii": "INR crore", "sip": "INR crore", "returns": "index points"}
+    summaries = {}
+    try:
+        with Session(DB) as session:
+            for indicator_id, key in series_ids.items():
+                obs = observations_at(session, indicator_id, when, vintage_mode, DEMO)
+                if not obs:
+                    summaries[key] = {"indicator_id": indicator_id, "label": labels[key], "unit": units[key], "status": "missing"}
+                    continue
+                last = obs[-1]
+                days_behind = (when.date() - last.period_end).days
+                summaries[key] = {
+                    "indicator_id": indicator_id, "label": labels[key], "unit": units[key],
+                    "status": "stale" if days_behind > stale_after[key] else "current",
+                    "latest_period_end": last.period_end.isoformat(),
+                    "value": float(last.value),
+                    "days_behind_as_of": days_behind,
+                    "observation_count": len(obs),
+                }
+            closes = observations_at(session, "india_nifty50_close_level", when, vintage_mode, DEMO)
+            if len(closes) >= 2:
+                close_records = [CapitalFlowRecord(
+                    series="india_nifty50_close_level", period_end=o.period_end, value=o.value,
+                    revision=o.vintage_id or "v1", published_at=o.published_at,
+                    retrieved_at=o.ingested_at or when, source_name=o.provider or "unknown",
+                    source_reference=o.source_url or "", quality=o.quality or "secondary",
+                    flow_basis="net", definition_note="stored observation",
+                ) for o in closes]
+                derived = monthly_returns_from_closes(close_records)
+                if derived:
+                    summaries["returns"]["latest_monthly_return_pct"] = float(derived[-1].value)
+                    summaries["returns"]["latest_monthly_return_period_end"] = derived[-1].period_end.isoformat()
+    except Exception:
+        summaries = {}
+
+    snapshot = capital_flows(as_of=as_of, vintage_mode=vintage_mode, operator=operator)
+    if snapshot.get("state") != "investigation_available":
+        return unavailable_view(snapshot.get("reason"), summaries, when)
+    view = reflexivity_cycle_view(snapshot, summaries)
+    view["vintage_mode"] = vintage_mode
+    return view
