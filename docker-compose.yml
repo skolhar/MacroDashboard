@@ -27,28 +27,29 @@ services:
         condition: service_healthy
     ports:
       - "127.0.0.1:8000:8000"
+    networks:
+      - default
+      - webui-shared
   web:
     build: ./apps/web
     environment:
       API_INTERNAL_URL: http://api:8000
       API_DOCS_URL: ${API_DOCS_URL:-http://localhost:8000/docs}
+      RESEARCH_UI_USER: ${RESEARCH_UI_USER:-}
+      RESEARCH_UI_PASSWORD: ${RESEARCH_UI_PASSWORD:-}
+      RESEARCH_OPERATOR_TOKEN: ${RESEARCH_OPERATOR_TOKEN:-}
     depends_on: [api]
     ports:
       - "127.0.0.1:3000:3000"
-  caddy:
-    image: caddy:2
-    profiles: [production]
-    ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-    depends_on: [api, web]
-    restart: unless-stopped
+    networks:
+      - default
+      - webui-shared
 volumes:
   pgdata:
-  caddy_data:
-  caddy_config:
+
+# api/web join the shared network so the common Caddy in open-webui can
+# reverse-proxy to them by service name (see ~/open-webui/Caddyfile).
+networks:
+  webui-shared:
+    external: true
+    name: webui-shared
