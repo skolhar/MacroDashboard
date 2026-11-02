@@ -5,6 +5,7 @@ Example: MARKET_DATA_RESEARCH_ENABLED=true python -m packages.jobs.market_refres
 """
 import argparse
 import json
+import os
 import time
 from datetime import date, datetime, timedelta, timezone
 from sqlalchemy import select
@@ -15,6 +16,45 @@ from packages.domain.store import engine
 from packages.market.base import instruments
 from packages.market.operations import refresh
 from packages.market.providers import provider_for
+
+
+def session_date_scalar(database, instrument_id: str, provider: str):
+    from sqlalchemy import select as _select
+    from packages.domain.models import MarketBar
+    with Session(database) as session:
+        return session.scalar(_select(MarketBar.session_date).where(MarketBar.instrument_id == instrument_id, MarketBar.provider == provider).order_by(MarketBar.session_date.desc()).limit(1))
+
+
+def refresh_with_fallback(database, instrument, start=None, end=None):
+    """Primary-provider refresh with a Tapetide EOD top-up for publish lag.
+
+    Yahoo serves the latest close late; when the primary run fails or leaves
+    the most recent completed session uningested, the missing window is retried
+    through the exchange-official Tapetide history (tokened MCP, free tier).
+    """
+    cfg = settings()
+    primary_error = None
+    try:
+        result = refresh(Session(database), provider_for(cfg.market_provider), instrument, start, end)
+    except Exception as exc:
+        primary_error, result = exc, None
+    fallback_end = end or (date.today() + timedelta(days=1))
+    latest = max((session_date_scalar(database, instrument.id, provider) or date.min for provider in (cfg.market_provider, "tapetide")), default=date.min)
+    if latest >= fallback_end - timedelta(days=1):
+        if result is None and primary_error is not None:
+            return {"instrument_id": instrument.id, "status": "already-current", "primary_error": type(primary_error).__name__}
+        return result
+    if not instrument.symbol("tapetide") or not os.environ.get("TAPETIDE_API_TOKEN", "").strip():
+        if primary_error is not None:
+            raise primary_error
+        return result
+    fallback_start = max(start or date.min, latest + timedelta(days=1), fallback_end - timedelta(days=30))
+    try:
+        return refresh(Session(database), provider_for("tapetide"), instrument, fallback_start, fallback_end)
+    except Exception:
+        if primary_error is not None:
+            raise primary_error
+        return result
 
 
 def main():
@@ -45,7 +85,7 @@ def main():
                 print(json.dumps({"instrument_id": id, "status": "cooldown", "last_fetch_at": previous.finished_at.isoformat()}), flush=True)
                 continue
             try:
-                result = refresh(session, provider, known[id], args.start, args.end_exclusive)
+                result = refresh_with_fallback(database, known[id], args.start, args.end_exclusive)
                 print(json.dumps({"instrument_id": id, **result}), flush=True)
             except Exception as exc:
                 failed = True

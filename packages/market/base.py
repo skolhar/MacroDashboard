@@ -19,9 +19,10 @@ class Instrument:
     timezone: str
     yahoo: str | None
     upstox: str | None
+    tapetide: str | None = None
 
     def symbol(self, provider: str) -> str | None:
-        if provider not in {"yahoo", "upstox"}:
+        if provider not in {"yahoo", "upstox", "tapetide"}:
             raise ValueError("Unknown market provider")
         return getattr(self, provider)
 
@@ -51,6 +52,7 @@ class MarketBatch:
     quality: str = "secondary_unverified"
     contract_identity: str | None = None
     roll_policy: str | None = None
+    eod_confirmed: bool = False
 
 
 class MarketProvider(Protocol):

@@ -46,12 +46,10 @@ def _flows_and_market_once(db):
         except Exception as exc:
             print(f"India flows refresh failed: {type(exc).__name__}", flush=True)
         try:
+            from packages.jobs.market_refresh import refresh_with_fallback
             from packages.market.base import instruments as market_instruments
-            from packages.market.operations import refresh as market_refresh_operation
-            from packages.market.providers import provider_for
-            cfg = settings()
             spec = market_instruments()["nifty50"]
-            print(f"Market refresh: {market_refresh_operation(session, provider_for(cfg.market_provider), spec)}", flush=True)
+            print(f"Market refresh: {refresh_with_fallback(db, spec)}", flush=True)
         except Exception as exc:
             print(f"Market refresh failed: {type(exc).__name__}", flush=True)
 

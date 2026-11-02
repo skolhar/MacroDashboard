@@ -1,6 +1,6 @@
 version: market-instruments-v1
 instruments:
-  - {id: nifty50, name: Nifty 50, kind: index, market: NSE, currency: INR, timezone: Asia/Kolkata, yahoo: '^NSEI', upstox: null}
+  - {id: nifty50, name: Nifty 50, kind: index, market: NSE, currency: INR, timezone: Asia/Kolkata, yahoo: '^NSEI', upstox: null, tapetide: 'Nifty 50'}
   - {id: usd_inr_yahoo, name: USD/INR Yahoo quote, kind: fx, market: GLOBAL_FX, currency: INR, timezone: Europe/London, yahoo: 'INR=X', upstox: null}
   - {id: wti_front_yahoo, name: WTI front-month futures proxy, kind: futures_proxy, market: GLOBAL_FUTURES, currency: USD, timezone: America/New_York, yahoo: 'CL=F', upstox: null}
   - {id: brent_front_yahoo, name: Brent front-month futures proxy, kind: futures_proxy, market: GLOBAL_FUTURES, currency: USD, timezone: America/New_York, yahoo: 'BZ=F', upstox: null}

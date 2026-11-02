@@ -843,20 +843,31 @@ def run_ingestion(payload: IngestionRequest, operator=Depends(require_scope("ing
 
 
 def _market_close_rows(session, when, mode):
-    """Point-in-time Nifty closes from the existing market-bars store (Yahoo).
+    """Point-in-time Nifty closes from the existing market-bars store.
 
-    Market prices stay in their own append-only table; the private research
-    endpoints read them here rather than duplicating them into observations.
+    Reads both providers (Yahoo primary, Tapetide EOD top-up) and keeps the
+    latest retrieval per session; market prices stay in their own append-only
+    table rather than being duplicated into observations.
     """
     from types import SimpleNamespace
     from packages.market.operations import history_at
-    bars = history_at(session, "nifty50", "yahoo", when)
+    rows = []
+    for provider in ("yahoo", "tapetide"):
+        try:
+            rows.extend(history_at(session, "nifty50", provider, when))
+        except Exception:
+            continue
+    by_session = {}
+    for bar in rows:
+        current = by_session.get(bar.session_date)
+        if current is None or bar.retrieved_at >= current.retrieved_at:
+            by_session[bar.session_date] = bar
     return [SimpleNamespace(
         period_start=bar.session_date, period_end=bar.session_date, value=bar.close,
         published_at=bar.retrieved_at, ingested_at=bar.retrieved_at,
         provider=bar.provider, source_url=bar.source_url,
-        vintage_id=f"yahoo-{bar.content_hash[:12]}", quality="secondary_unverified",
-    ) for bar in bars]
+        vintage_id=f"{bar.provider}-{bar.content_hash[:12]}", quality="secondary_unverified",
+    ) for bar in sorted(by_session.values(), key=lambda bar: bar.session_date)]
 
 
 @app.get("/api/v1/capital-flows")

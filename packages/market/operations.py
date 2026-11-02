@@ -28,7 +28,8 @@ def ingest_batch(session: Session, batch: MarketBatch) -> dict:
     duplicates = 0
     revisions = 0
     for candle in batch.candles:
-        if candle.session_date >= batch.retrieved_at.astimezone(ZoneInfo(batch.exchange_timezone)).date():
+        local_today = batch.retrieved_at.astimezone(ZoneInfo(batch.exchange_timezone)).date()
+        if candle.session_date > local_today or (candle.session_date == local_today and not batch.eod_confirmed):
             raise ValueError("Incomplete or future market session")
         prices = (candle.open, candle.high, candle.low, candle.close)
         if any(not value.is_finite() for value in prices) or (candle.adjusted_close is not None and not candle.adjusted_close.is_finite()) or candle.low > min(candle.open, candle.close) or candle.high < max(candle.open, candle.close) or (batch.instrument.kind != "futures_proxy" and min(prices) <= 0) or (candle.volume is not None and candle.volume < 0):
