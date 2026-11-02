@@ -20,6 +20,23 @@ test('spoofed proxy headers do not bypass private page authentication', async ({
   }
 });
 
+test('reflexivity cycle stays private and responsive', async ({ page, request }) => {
+  const denied = await request.get('/intelligence/reflexivity', { headers: { 'X-Forwarded-User': 'research' } });
+  expect([401, 404]).toContain(denied.status());
+  if (process.env.RESEARCH_UI_USER && process.env.RESEARCH_UI_PASSWORD && process.env.RESEARCH_OPERATOR_TOKEN) {
+    await page.setExtraHTTPHeaders({ Authorization: 'Basic ' + Buffer.from(`${process.env.RESEARCH_UI_USER}:${process.env.RESEARCH_UI_PASSWORD}`).toString('base64') });
+    for (const width of [1440, 375]) {
+      await page.setViewportSize({ width, height: 900 });
+      const response = await page.goto('/intelligence/reflexivity');
+      expect(response?.status()).toBe(200);
+      await expect(page.getByRole('heading', { name: 'Reflexivity research cycle' })).toBeVisible();
+      await expect(page.getByText('Current observations')).toBeVisible();
+      await expect(page.getByText('not an established causal relationship').first()).toBeVisible();
+      await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+    }
+  }
+});
+
 test('discovery research stays private and responsive', async ({ page, request }) => {
   const denied = await request.get('/intelligence/discovery', { headers: { 'X-Forwarded-User': 'research' } });
   expect([401, 404]).toContain(denied.status());
