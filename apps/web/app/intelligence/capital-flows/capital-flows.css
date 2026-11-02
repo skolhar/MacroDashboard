@@ -1,0 +1,17 @@
+.container { max-width: 980px; margin: 0 auto; padding: 24px 16px; }
+.panel { border: 1px solid #2a3a44; border-radius: 8px; padding: 14px 18px; margin: 14px 0; }
+.panel h2 { font-size: 1.05rem; margin: 0 0 6px; }
+.muted { color: #8aa2af; font-size: 0.9rem; }
+.empty { color: #c7a24a; font-size: 0.92rem; padding: 8px 0; }
+.result { font-size: 0.95rem; }
+.limitation { color: #c7824a; }
+.summary-stat { display: inline-block; border: 1px solid #2a3a44; border-radius: 8px; padding: 8px 14px; margin: 10px 0; }
+.summary-stat span { display: block; font-size: 0.75rem; color: #8aa2af; text-transform: uppercase; letter-spacing: 0.06em; }
+.summary-stat small { color: #8aa2af; }
+table { border-collapse: collapse; width: 100%; margin-top: 6px; }
+td, th { text-align: left; padding: 6px 10px; border-bottom: 1px solid #22323c; }
+th { color: #8aa2af; font-weight: 500; width: 40%; }
+.filters { margin-top: 24px; display: flex; gap: 12px; align-items: end; }
+.filters label { display: flex; flex-direction: column; gap: 4px; font-size: 0.85rem; color: #8aa2af; }
+.filters input { background: #12212b; color: #e6f1f4; border: 1px solid #2a3a44; border-radius: 6px; padding: 6px 10px; }
+.filters button { background: #63d7d0; color: #0b1a22; border: 0; border-radius: 6px; padding: 7px 14px; cursor: pointer; }

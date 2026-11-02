@@ -840,3 +840,71 @@ def run_ingestion(payload: IngestionRequest, operator=Depends(require_scope("ing
             session.add(job)
             audit_admin(session, operator["operator_id"], "treasury_ingestion", "failed", type(exc).__name__)
         raise HTTPException(502, "Source ingestion failed; last known data retained")
+
+
+@app.get("/api/v1/capital-flows")
+def capital_flows(as_of: str | None = None, vintage_mode: str = "system_known", operator=Depends(research_reader)):
+    """Private capital-flow investigation snapshot with point-in-time selection.
+
+    Observations are selected as of the evaluation timestamp: `system_known`
+    mode excludes anything ingested after the cutoff, `source_known` mode uses
+    publisher timestamps. Later revisions never leak backward into a
+    historical assessment, and future-dated rows are excluded by the scoring
+    engine. Returns an explicit unavailable state when no attributable
+    observations are stored; never fabricates flows.
+    """
+    from packages.scoring.capital_flow_reflexivity import evaluate
+    from packages.domain.store import observations_at
+    from packages.connectors.india_capital_flows import CapitalFlowRecord, monthly_returns_from_closes
+
+    when = parsed_as_of(as_of)
+    if vintage_mode not in {"system_known", "source_known"}:
+        raise HTTPException(422, "vintage_mode must be system_known or source_known")
+    series_ids = {
+        "india_fpi_equity_net_flow_inr_cr": "fpi",
+        "india_dii_equity_net_flow_inr_cr": "dii",
+        "india_mf_sip_contribution_inr_cr": "sip",
+        "india_nifty50_close_level": "returns",
+    }
+    rows = {}
+    try:
+        with Session(DB) as session:
+            for indicator_id, key in series_ids.items():
+                rows[key] = observations_at(session, indicator_id, when, vintage_mode, DEMO)
+    except Exception:
+        rows = {}
+    has_flows = bool(rows.get("fpi")) and bool(rows.get("dii"))
+    if not has_flows:
+        return {
+            "as_of": when.isoformat(),
+            "state": "data_unavailable",
+            "vintage_mode": vintage_mode,
+            "reason": "No attributable FPI/DII flow observations known at the evaluation time; investigation requires actual observations from exchange or AMFI releases.",
+            "required_series": sorted(series_ids),
+            "limitation": "Descriptive co-occurrence only; flows data carries no actor motivation. No feedback loop or absorption capacity is established."
+        }
+
+    def to_record(obs, series):
+        return CapitalFlowRecord(
+            series=series, period_end=obs.period_end, value=obs.value,
+            revision=obs.vintage_id or "v1", published_at=obs.published_at,
+            retrieved_at=obs.ingested_at or obs.published_at or when,
+            source_name=obs.provider or "unknown", source_reference=obs.source_url or "",
+            quality=obs.quality or "secondary",
+            flow_basis="gross" if series == "india_mf_sip_contribution_inr_cr" else "net",
+            definition_note="stored observation",
+        )
+
+    # Stored index closes are levels, not returns: month-over-month percent
+    # changes are derived explicitly so scoring never sums index points.
+    close_records = [to_record(o, "india_nifty50_close_level") for o in rows["returns"]]
+    return_records = monthly_returns_from_closes(close_records)
+    result = evaluate(
+        [to_record(o, "india_fpi_equity_net_flow_inr_cr") for o in rows["fpi"]],
+        [to_record(o, "india_dii_equity_net_flow_inr_cr") for o in rows["dii"]],
+        [to_record(o, "india_mf_sip_contribution_inr_cr") for o in rows["sip"]],
+        return_records,
+        when,
+    )
+
+    return {"as_of": when.isoformat(), "state": "investigation_available", "vintage_mode": vintage_mode, **result}
