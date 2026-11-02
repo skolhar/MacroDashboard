@@ -843,21 +843,23 @@ def run_ingestion(payload: IngestionRequest, operator=Depends(require_scope("ing
 
 
 @app.get("/api/v1/capital-flows")
-def capital_flows(as_of: str | None = None):
-    """Evidence-first capital-flow investigation snapshot.
+def capital_flows(as_of: str | None = None, vintage_mode: str = "system_known", operator=Depends(research_reader)):
+    """Private capital-flow investigation snapshot with point-in-time selection.
 
-    Descriptive FPI/DII offset, persistence, SIP response and spurious
-    association checks. Returns an explicit unavailable state when no
-    attributable observations are stored; never fabricates flows.
+    Observations are selected as of the evaluation timestamp: `system_known`
+    mode excludes anything ingested after the cutoff, `source_known` mode uses
+    publisher timestamps. Later revisions never leak backward into a
+    historical assessment, and future-dated rows are excluded by the scoring
+    engine. Returns an explicit unavailable state when no attributable
+    observations are stored; never fabricates flows.
     """
-    from datetime import datetime as _dt, timezone as _tz
     from packages.scoring.capital_flow_reflexivity import evaluate
-    from packages.domain.models import Observation
     from packages.domain.store import observations_at
+    from packages.connectors.india_capital_flows import CapitalFlowRecord, monthly_returns_from_closes
 
-    when = (_dt.fromisoformat(as_of) if as_of else _dt.now(_tz.utc))
-    if when.tzinfo is None:
-        when = when.replace(tzinfo=_tz.utc)
+    when = parsed_as_of(as_of)
+    if vintage_mode not in {"system_known", "source_known"}:
+        raise HTTPException(422, "vintage_mode must be system_known or source_known")
     series_ids = {
         "india_fpi_equity_net_flow_inr_cr": "fpi",
         "india_dii_equity_net_flow_inr_cr": "dii",
@@ -866,16 +868,9 @@ def capital_flows(as_of: str | None = None):
     }
     rows = {}
     try:
-        with Session(engine) as session:
+        with Session(DB) as session:
             for indicator_id, key in series_ids.items():
-                obs = session.scalars(
-                    select(Observation)
-                    .where(Observation.indicator_id == indicator_id)
-                    .where(Observation.period_end <= when.date())
-                    .order_by(Observation.period_end.desc())
-                    .limit(200)
-                ).all()
-                rows[key] = sorted(obs, key=lambda o: o.period_end)
+                rows[key] = observations_at(session, indicator_id, when, vintage_mode, DEMO)
     except Exception:
         rows = {}
     has_flows = bool(rows.get("fpi")) and bool(rows.get("dii"))
@@ -883,22 +878,23 @@ def capital_flows(as_of: str | None = None):
         return {
             "as_of": when.isoformat(),
             "state": "data_unavailable",
-            "reason": "No attributable FPI/DII flow observations stored; investigation requires actual observations from exchange or AMFI releases.",
+            "vintage_mode": vintage_mode,
+            "reason": "No attributable FPI/DII flow observations known at the evaluation time; investigation requires actual observations from exchange or AMFI releases.",
             "required_series": sorted(series_ids),
             "limitation": "Descriptive co-occurrence only; flows data carries no actor motivation. No feedback loop or absorption capacity is established."
         }
 
     def to_record(obs, series):
-        from packages.connectors.india_capital_flows import CapitalFlowRecord
         return CapitalFlowRecord(
             series=series, period_end=obs.period_end, value=obs.value,
             revision=obs.vintage_id or "v1", published_at=obs.published_at,
-            retrieved_at=obs.published_at or obs.recorded_at or when,
+            retrieved_at=obs.ingested_at or obs.published_at or when,
             source_name=obs.provider or "unknown", source_reference=obs.source_url or "",
-            quality=obs.quality or "secondary", flow_basis="net", definition_note="stored observation",
+            quality=obs.quality or "secondary",
+            flow_basis="gross" if series == "india_mf_sip_contribution_inr_cr" else "net",
+            definition_note="stored observation",
         )
 
-    from packages.connectors.india_capital_flows import monthly_returns_from_closes
     # Stored index closes are levels, not returns: month-over-month percent
     # changes are derived explicitly so scoring never sums index points.
     close_records = [to_record(o, "india_nifty50_close_level") for o in rows["returns"]]
@@ -910,4 +906,5 @@ def capital_flows(as_of: str | None = None):
         return_records,
         when,
     )
-    return {"as_of": when.isoformat(), "state": "investigation_available", **result}
+
+    return {"as_of": when.isoformat(), "state": "investigation_available", "vintage_mode": vintage_mode, **result}
