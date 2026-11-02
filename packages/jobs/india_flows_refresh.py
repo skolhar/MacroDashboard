@@ -27,6 +27,12 @@ def refresh_once(session: Session, min_date: date) -> dict:
         results["sip_contributions"] = ingest_records(session, records, raw, "vrid_amfi_secondary")
     except Exception as exc:
         source_errors["sip_contributions"] = type(exc).__name__
+    try:
+        from packages.connectors.tapetide_flows import fetch as fetch_tapetide_flows
+        raw, records = fetch_tapetide_flows(min_date)
+        results["tapetide_flows"] = ingest_records(session, records, raw, "tapetide_fii_dii")
+    except Exception as exc:
+        source_errors["tapetide_flows"] = type(exc).__name__
     if not results and source_errors:
         raise RuntimeError(f"All India flow sources failed: {source_errors}")
     return {**results, **{f"source_error_{key}": value for key, value in source_errors.items()}}
