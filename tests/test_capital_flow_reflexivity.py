@@ -82,6 +82,55 @@ def test_no_offset_when_fpi_net_positive():
 def test_offset_below_threshold_returns_none():
     fpi = sessions(5, values=["-200"])
     dii = sessions(5, series=DII, values=[200])
+def test_offset_below_threshold_returns_none():
+    fpi = sessions(5, values=["-200"])
+    dii = sessions(5, series=DII, values=[200])
+    assert offset(fpi, dii, date(2026, 10, 6)) is None
+
+
+def test_offset_full_offset_when_dii_matches_fpi_selling():
+    """Full offset: DII buying exactly matches FPI selling magnitude."""
+    fpi = sessions(5, values=["-1000"])
+    dii = sessions(5, series=DII, values=[1000])
+    result = offset(fpi, dii, date(2026, 10, 6))
+    assert result is not None
+    assert result["offset_size_cr"] == 5000.0
+    assert result["gross_opposing_flow_cr"] == 10000.0
+    assert result["unoffset_fpi_selling_cr"] == 0.0
+    assert result["excess_dii_buying_cr"] == 0.0
+
+
+def test_offset_partial_offset_reports_remaining_selling():
+    """Partial offset: DII buying is less than FPI selling; remainder is unoffset."""
+    fpi = sessions(5, values=["-1000"])
+    dii = sessions(5, series=DII, values=[600])
+    result = offset(fpi, dii, date(2026, 10, 6))
+    assert result is not None
+    assert result["offset_size_cr"] == 3000.0   # min(3000, 5000)
+    assert result["gross_opposing_flow_cr"] == 8000.0
+    assert result["unoffset_fpi_selling_cr"] == 2000.0
+    assert result["excess_dii_buying_cr"] == 0.0
+
+
+def test_offset_excess_dii_buying_capped_at_fpi_selling():
+    """Excess domestic buying: matched offset is capped at FPI selling magnitude."""
+    fpi = sessions(5, values=["-1000"])
+    dii = sessions(5, series=DII, values=[1500])
+    result = offset(fpi, dii, date(2026, 10, 6))
+    assert result is not None
+    assert result["offset_size_cr"] == 5000.0   # min(7500, 5000)
+    assert result["gross_opposing_flow_cr"] == 12500.0
+    assert result["unoffset_fpi_selling_cr"] == 0.0
+    assert result["excess_dii_buying_cr"] == 2500.0
+
+
+def test_offset_threshold_applies_to_matched_amount_not_gross():
+    """The minimum threshold must gate the matched offset amount, not the gross opposing magnitude."""
+    fpi = sessions(5, values=["-10000"])
+    dii = sessions(5, series=DII, values=[400])
+    # matched offset = min(2000, 50000) = 2000 < OFFSET_MIN(2500); the old gross
+    # formula (2000 - (-50000) = 52000) would have passed this threshold.
+    assert offset(fpi, dii, date(2026, 10, 6)) is None
     assert offset(fpi, dii, date(2026, 10, 6)) is None
 
 
@@ -186,10 +235,11 @@ def test_spurious_same_session_flows_are_co_occurrence_without_order_inference()
     day = date(2026, 10, 5)
     fpi = [flow(FPI, day, -3000, retrieved_at=NOW)]
     dii = [flow(DII, day, 3000, retrieved_at=NOW - timedelta(hours=1))]  # reported earlier that day
-    returns = [flow(MONTHLY, date(2026, 11, 30), 5)]
+    returns = [flow(MONTHLY, date(2026, 11, 30), 5), flow(MONTHLY, date(2026, 12, 31), -2),
+               flow(MONTHLY, date(2027, 1, 31), 3)]
     result = spurious_association_check(fpi, dii, returns, day)
     assert result["state"] == "co_occurrence_observed"  # retrieval order is never an economic order
-    assert result["forward_return_pct"] == pytest.approx(5.0)
+    assert result["forward_return_pct"] == pytest.approx(5.987, abs=0.01)
     assert "cannot establish" in result["caveat"]
 
 
@@ -226,25 +276,47 @@ def test_spurious_excludes_return_month_overlapping_offset_window():
     day = date(2026, 10, 5)
     fpi = [flow(FPI, day, -3000)]
     dii = [flow(DII, day, 3000)]
-    returns = [flow(MONTHLY, date(2026, 10, 31), 10), flow(MONTHLY, date(2026, 11, 30), 5)]
+    returns = [flow(MONTHLY, date(2026, 10, 31), 10), flow(MONTHLY, date(2026, 11, 30), 5),
+               flow(MONTHLY, date(2026, 12, 31), -2), flow(MONTHLY, date(2027, 1, 31), 3)]
     result = spurious_association_check(fpi, dii, returns, day)
     assert result["state"] == "co_occurrence_observed"
-    assert result["forward_months"] == 1  # October's return overlaps the offset window
-    assert result["forward_return_pct"] == pytest.approx(5.0)
+    assert result["forward_months"] == 3  # October's return overlaps the offset window and is excluded
+    assert result["forward_return_pct"] == pytest.approx(5.987, abs=0.01)
 
 
 def test_spurious_flags_gap_in_forward_window():
     day = date(2026, 10, 5)
     fpi = [flow(FPI, day, -3000)]
     dii = [flow(DII, day, 3000)]
-    returns = [flow(MONTHLY, date(2026, 11, 30), 5), flow(MONTHLY, date(2027, 1, 31), 3)]  # December missing
+    returns = [flow(MONTHLY, date(2026, 11, 30), 5), flow(MONTHLY, date(2026, 12, 31), -2),
+               flow(MONTHLY, date(2027, 2, 28), 3)]  # January missing between December and February
     result = spurious_association_check(fpi, dii, returns, day)
     assert result["state"] == "unresolved"
     assert "incomplete" in result["reason"]
+    assert "missing monthly return between observed months" in result["reason"]
 
 
-# --- evaluate: exclusions, freshness, observed vs hypothesised ---
+def test_spurious_rejects_incomplete_horizon():
+    """Fewer forward months than configured must be unresolved, never an outcome."""
+    day = date(2026, 10, 5)
+    fpi = [flow(FPI, day, -3000)]
+    dii = [flow(DII, day, 3000)]
+    returns = [flow(MONTHLY, date(2026, 11, 30), 5), flow(MONTHLY, date(2026, 12, 31), -2)]
+    result = spurious_association_check(fpi, dii, returns, day)
+    assert result["state"] == "unresolved"
+    assert "only 2 of 3" in result["reason"]
 
+
+def test_spurious_rejects_window_starting_late():
+    """If the first required forward month is missing, the window never starts."""
+    day = date(2026, 10, 5)
+    fpi = [flow(FPI, day, -3000)]
+    dii = [flow(DII, day, 3000)]
+    returns = [flow(MONTHLY, date(2026, 12, 31), 5), flow(MONTHLY, date(2027, 1, 31), -2),
+               flow(MONTHLY, date(2027, 2, 28), 3)]  # November missing: window cannot start
+    result = spurious_association_check(fpi, dii, returns, day)
+    assert result["state"] == "unresolved"
+    assert "first required forward month" in result["reason"]
 def test_evaluate_excludes_future_dated_and_late_ingested_rows():
     fpi = sessions(5) + [flow(FPI, date(2026, 11, 20), -3000),
                          flow(FPI, date(2026, 10, 5), -3000, retrieved_at=NOW + timedelta(days=1))]

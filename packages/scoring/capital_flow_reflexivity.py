@@ -113,8 +113,13 @@ def offset(rows_fpi, rows_dii, day, *, sessions=OFFSET_MIN_SESSIONS, as_of=None)
     dii_net = sum(dii[d].value for d in window)
     if fpi_net >= 0 or dii_net <= 0:
         return None
-    size = dii_net - fpi_net  # dii positive minus fpi negative
-    if size < OFFSET_MIN:
+    # Matched offset: only the smaller side can offset the other. Adding the
+    # two magnitudes (dii_net - fpi_net) would overstate domestic buying that
+    # offsets foreign selling, because DII buying beyond the FPI selling
+    # magnitude offsets nothing that was sold.
+    fpi_selling = -fpi_net
+    offset_amount = min(dii_net, fpi_selling)
+    if offset_amount < OFFSET_MIN:
         return None
     return {
         "state": "dii_offset_fpi_selling",
@@ -122,10 +127,13 @@ def offset(rows_fpi, rows_dii, day, *, sessions=OFFSET_MIN_SESSIONS, as_of=None)
         "matched_sessions": len(window),
         "fpi_net_cr": float(fpi_net),
         "dii_net_cr": float(dii_net),
-        "offset_size_cr": float(size),
+        "offset_size_cr": float(offset_amount),
+        "gross_opposing_flow_cr": float(fpi_selling + dii_net),
+        "unoffset_fpi_selling_cr": float(fpi_selling - dii_net) if dii_net < fpi_selling else 0.0,
+        "excess_dii_buying_cr": float(dii_net - fpi_selling) if dii_net > fpi_selling else 0.0,
         "unmatched_sessions_excluded": exclusions["fpi_unmatched_sessions"] + exclusions["dii_unmatched_sessions"],
         "gross_rows_excluded": exclusions["fpi_gross_rows_excluded"] + exclusions["dii_gross_rows_excluded"],
-        "basis": "co-occurrence of opposite-sign net flows over identical reporting sessions; not evidence of intent",
+        "basis": "co-occurrence of opposite-sign net flows over identical reporting sessions; offset size is the smaller opposing magnitude, not evidence of intent or absorption capacity",
     }
 
 
@@ -249,18 +257,15 @@ def sip_response(rows_sip, rows_returns, as_of, *, lag_months=SIP_RETURN_LAG_MON
         "as_of": as_of.isoformat(),
     }
 
-
 def spurious_association_check(rows_fpi, rows_dii, rows_returns, day, *, as_of=None):
     """Flag associations that would look causal but fail basic order tests.
 
-    FPI and DII flows on the same reporting date are treated as
-    co-occurrence: reporting or retrieval timestamps cannot establish the
-    order in which investor groups actually traded, so no behavioural order
-    is inferred from them. A forward return is reported only from complete
-    calendar months that start strictly after the evaluation date, so the
-    return window never overlaps the offset window. Percentage returns are
-    compounded, never summed, and an incomplete forward window is reported
-    as unresolved rather than as a conclusion.
+    Same-session FPI and DII flows are co-occurrence: reporting or retrieval
+    timestamps cannot establish trading order. A forward return is reported
+    only when the complete configured forward window — every required
+    calendar month, starting the month after the evaluation date — is
+    available. Percentage returns are compounded, never summed, and an
+    incomplete horizon is always unresolved rather than a conclusion.
     """
     if as_of is None:
         fpi_rows, dii_rows, return_rows = rows_fpi, rows_dii, rows_returns
@@ -273,9 +278,26 @@ def spurious_association_check(rows_fpi, rows_dii, rows_returns, day, *, as_of=N
     forward = sorted(
         (r for r in return_rows if r.frequency == "monthly" and _first_of_month(r.period_end) > day),
         key=lambda x: x.period_end,
-    )[:SPURIOUS_FORWARD_MONTHS]
+    )
     if not forward:
         return {"state": "unresolved", "reason": "no complete forward return month available"}
+    # The forward window must begin with the calendar month after the offset
+    # date and contain every configured forward month. A missing first month,
+    # a missing intermediate month, or fewer than the configured number of
+    # complete months all leave the horizon incomplete, so no outcome is
+    # reported from an unfinished window.
+    expected_first = _shift_month(day.year, day.month, 1)
+    if (forward[0].period_end.year, forward[0].period_end.month) != expected_first:
+        return {
+            "state": "unresolved",
+            "reason": "incomplete forward return window: monthly return missing for the first required forward month",
+        }
+    forward = forward[:SPURIOUS_FORWARD_MONTHS]
+    if len(forward) < SPURIOUS_FORWARD_MONTHS:
+        return {
+            "state": "unresolved",
+            "reason": f"incomplete forward return window: only {len(forward)} of {SPURIOUS_FORWARD_MONTHS} required forward months available",
+        }
     for previous, current in zip(forward, forward[1:]):
         expected = _shift_month(previous.period_end.year, previous.period_end.month, 1)
         if (current.period_end.year, current.period_end.month) != expected:
@@ -290,6 +312,7 @@ def spurious_association_check(rows_fpi, rows_dii, rows_returns, day, *, as_of=N
         "forward_return_pct": float(_compound([r.value for r in forward])),
         "caveat": "same-session flows are co-occurrence; reporting timestamps cannot establish trading order, and causality remains unproven without independently dated actor-response evidence",
     }
+
 
 
 def evaluate(rows_fpi, rows_dii, rows_sip, rows_returns, as_of):
