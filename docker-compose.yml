@@ -22,6 +22,7 @@ services:
       ADMIN_TOKEN_SHA256: ${ADMIN_TOKEN_SHA256:-}
       MARKET_DATA_RESEARCH_ENABLED: ${MARKET_DATA_RESEARCH_ENABLED:-false}
       MARKET_DATA_PROVIDER: ${MARKET_DATA_PROVIDER:-yahoo}
+      TAPETIDE_API_TOKEN: ${TAPETIDE_API_TOKEN:-}
     depends_on:
       db:
         condition: service_healthy
@@ -56,6 +57,7 @@ services:
       INGESTION_SCHEDULE_ENABLED: ${INGESTION_SCHEDULE_ENABLED:-false}
       MARKET_DATA_RESEARCH_ENABLED: ${MARKET_DATA_RESEARCH_ENABLED:-false}
       MARKET_DATA_PROVIDER: ${MARKET_DATA_PROVIDER:-yahoo}
+      TAPETIDE_API_TOKEN: ${TAPETIDE_API_TOKEN:-}
     depends_on:
       db:
         condition: service_healthy
