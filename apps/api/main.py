@@ -940,8 +940,66 @@ def capital_flows(as_of: str | None = None, vintage_mode: str = "system_known", 
     return {"as_of": when.isoformat(), "state": "investigation_available", "vintage_mode": vintage_mode, **result}
 
 
+REFLEXIVITY_RANGES = {"1m": timedelta(days=31), "3m": timedelta(days=93), "since_april": date(2026, 4, 1)}
+
+
+def _reflexivity_series(session, when, selected_range, vintage_mode):
+    """Read-only historical series for the reflexivity charts, point-in-time.
+
+    Every row preserves the stored date, unit basis and provider attribution.
+    Missing observations are nulls, never interpolated or zero-filled.
+    """
+    from packages.connectors.india_capital_flows import FPI as FPI_ID, DII as DII_ID, SIP as SIP_ID
+    fixed_start = REFLEXIVITY_RANGES.get(selected_range)
+    start_day = fixed_start if isinstance(fixed_start, date) else when.date() - fixed_start
+    by_day = {}
+    for indicator_id, series_key in ((FPI_ID, "fpi"), (DII_ID, "dii")):
+        for obs in observations_at(session, indicator_id, when, vintage_mode, DEMO):
+            if obs.period_end < start_day:
+                continue
+            row = by_day.setdefault(obs.period_end, {})
+            row[series_key] = float(obs.value)
+            row[f"{series_key}_provider"] = obs.provider or "unknown"
+    flows = []
+    for day in sorted(by_day):
+        row = by_day[day]
+        entry = {"date": day.isoformat(), "fpi_net": row.get("fpi"), "dii_net": row.get("dii"),
+                 "fpi_roll5": None, "dii_roll5": None,
+                 "fpi_provider": row.get("fpi_provider"), "dii_provider": row.get("dii_provider")}
+        for series_key, roll_key in (("fpi", "fpi_roll5"), ("dii", "dii_roll5")):
+            session_values = [(d, by_day[d][series_key]) for d in sorted(by_day) if by_day[d].get(series_key) is not None]
+            position = next((i for i, (d, _) in enumerate(session_values) if d == day), None)
+            if position is not None and position >= 4:
+                entry[roll_key] = round(sum(value for _, value in session_values[position - 4:position + 1]), 2)
+        flows.append(entry)
+    closes = observations_at(session, "india_nifty50_close_level", when, vintage_mode, DEMO)
+    if closes:
+        closes = [row for row in closes if row.period_end >= start_day]
+    else:
+        closes = [row for row in _market_close_rows(session, when, vintage_mode) if row.period_end >= start_day]
+    nifty = []
+    if closes:
+        first = float(closes[0].value)
+        for row in closes:
+            nifty.append({"date": row.period_end.isoformat(), "close": float(row.value),
+                          "normalized": round(float(row.value) / first * 100, 4), "provider": row.provider})
+    sip = []
+    sip_rows = [row for row in observations_at(session, SIP_ID, when, vintage_mode, DEMO) if row.period_end >= start_day]
+    for position, row in enumerate(sip_rows):
+        growth = None
+        if position and sip_rows[position - 1].period_end.month != 12:
+            prior = sip_rows[position - 1].period_end
+            if prior.year == row.period_end.year and prior.month + 1 == row.period_end.month:
+                previous = float(sip_rows[position - 1].value)
+                if previous:
+                    growth = round((float(row.value) / previous - 1) * 100, 2)
+        sip.append({"period_end": row.period_end.isoformat(), "value": float(row.value),
+                    "unit": "INR crore", "provider": row.provider or "unknown", "mom_growth_pct": growth})
+    return {"range": selected_range, "start": start_day.isoformat(), "flows": flows, "nifty": nifty, "sip": sip}
+
+
 @app.get("/api/v1/research/reflexivity-cycle")
-def reflexivity_cycle(as_of: str | None = None, vintage_mode: str = "system_known", operator=Depends(research_reader)):
+def reflexivity_cycle(as_of: str | None = None, range: str = "since_april", vintage_mode: str = "system_known", operator=Depends(research_reader)):
     """Cycle-centric research view: domestic equity flows and market reflexivity.
 
     Composes the existing capital-flow investigation into five research
@@ -959,6 +1017,8 @@ def reflexivity_cycle(as_of: str | None = None, vintage_mode: str = "system_know
     when = parsed_as_of(as_of)
     if vintage_mode not in {"system_known", "source_known"}:
         raise HTTPException(422, "vintage_mode must be system_known or source_known")
+    if range not in REFLEXIVITY_RANGES:
+        raise HTTPException(422, "range must be 1m, 3m or since_april")
     series_ids = {
         "india_fpi_equity_net_flow_inr_cr": "fpi",
         "india_dii_equity_net_flow_inr_cr": "dii",
@@ -969,8 +1029,12 @@ def reflexivity_cycle(as_of: str | None = None, vintage_mode: str = "system_know
     labels = {"fpi": "FPI equity flows", "dii": "DII equity flows", "sip": "SIP contributions", "returns": "Nifty closes"}
     units = {"fpi": "INR crore", "dii": "INR crore", "sip": "INR crore", "returns": "index points"}
     summaries = {}
+    series = {"range": range, "flows": [], "nifty": [], "sip": []}
     try:
         with Session(DB) as session:
+            fixed_start = REFLEXIVITY_RANGES.get(range)
+            start_day = fixed_start if isinstance(fixed_start, date) else when.date() - fixed_start
+            series = _reflexivity_series(session, when, range, vintage_mode)
             for indicator_id, key in series_ids.items():
                 obs = observations_at(session, indicator_id, when, vintage_mode, DEMO)
                 if key == "returns" and not obs:
@@ -1005,10 +1069,14 @@ def reflexivity_cycle(as_of: str | None = None, vintage_mode: str = "system_know
                     summaries["returns"]["latest_monthly_return_period_end"] = derived[-1].period_end.isoformat()
     except Exception:
         summaries = {}
+        series = {"range": range, "flows": [], "nifty": [], "sip": []}
 
     snapshot = capital_flows(as_of=as_of, vintage_mode=vintage_mode, operator=operator)
     if snapshot.get("state") != "investigation_available":
-        return unavailable_view(snapshot.get("reason"), summaries, when)
+        view = unavailable_view(snapshot.get("reason"), summaries, when)
+        view["series"] = series
+        return view
     view = reflexivity_cycle_view(snapshot, summaries)
     view["vintage_mode"] = vintage_mode
+    view["series"] = series
     return view
